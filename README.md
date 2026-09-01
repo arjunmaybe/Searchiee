@@ -1,4 +1,5 @@
-# deep-search (starter scaffold)
+# Searchiee
+(starter scaffold)
 
 A from-scratch desktop semantic search app. This is a minimal starting
 skeleton, not a finished product — it gives you a working file watcher,
