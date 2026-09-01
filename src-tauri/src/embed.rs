@@ -19,6 +19,9 @@ struct EmbedDatum {
     embedding: Vec<f32>,
 }
 
+/// A stub for generating text embeddings using the Voyage AI API.
+/// This function currently handles one text input at a time.
+/// It expects the VOYAGE_API_KEY environment variable to be set.
 pub async fn embed_text(text: &str) -> Result<Vec<f32>, reqwest::Error> {
     let api_key = std::env::var("VOYAGE_API_KEY").expect(
         "VOYAGE_API_KEY not set — copy .env.example to .env and add your key",
