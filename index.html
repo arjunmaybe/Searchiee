@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>deep-search</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #111;
+        color: #eee;
+      }
+      #query {
+        width: 100%;
+        padding: 10px 12px;
+        font-size: 16px;
+        border-radius: 8px;
+        border: 1px solid #444;
+        background: #1a1a1a;
+        color: #eee;
+        box-sizing: border-box;
+      }
+      #results {
+        margin-top: 16px;
+      }
+      .result {
+        padding: 10px 0;
+        border-bottom: 1px solid #2a2a2a;
+      }
+      .result .path {
+        font-size: 13px;
+        color: #8ab4f8;
+      }
+      .result .snippet {
+        font-size: 14px;
+        color: #aaa;
+        margin-top: 4px;
+      }
+      #index-btn {
+        margin-top: 12px;
+        padding: 8px 14px;
+        border-radius: 6px;
+        border: 1px solid #444;
+        background: #222;
+        color: #eee;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <input id="query" type="text" placeholder="Search your indexed files..." />
+    <button id="index-btn">Index a folder</button>
+    <div id="results"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

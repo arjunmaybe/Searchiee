@@ -1,0 +1,26 @@
+{
+  "productName": "deep-search",
+  "version": "0.1.0",
+  "identifier": "com.example.deepsearch",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "deep-search",
+        "width": 720,
+        "height": 480,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}
