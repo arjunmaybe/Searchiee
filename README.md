@@ -13,7 +13,7 @@ can start filling in the real logic.
   bundling Chromium.
 - **Vanilla TS frontend, not React** — one less framework's overhead while
   the app is this small. Swap in React/Vite later if the UI grows.
-- **Hosted embeddings (Voyage) to start** — your machine doesn't have the
+- **Hosted embeddings (Voyage) to start** — if your machine doesn't have the
   RAM/VRAM headroom to comfortably run a local embedding model alongside
   a Rust build and a dev server. The embedding call is isolated in one
   function (`src-tauri/src/embed.rs`) so switching to local models later
@@ -25,7 +25,7 @@ can start filling in the real logic.
 ## Prerequisites (install these on your own machine, not here)
 
 - Rust + Cargo: https://rustup.rs
-- Node.js (you already have this)
+- Node.js 
 - Tauri CLI: `cargo install tauri-cli`
 - A Voyage AI API key: https://www.voyageai.com
 
