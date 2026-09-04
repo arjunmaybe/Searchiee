@@ -11,10 +11,14 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "6"
-reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 walkdir = "2"
 uuid = { version = "1", features = ["v4"] }
+fastembed = "6.0.2"
+
+# Only needed if/when you switch to a hosted embedding API instead of
+# the local fastembed model. Uncomment if you go that route later.
+# reqwest = { version = "0.12", features = ["json"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

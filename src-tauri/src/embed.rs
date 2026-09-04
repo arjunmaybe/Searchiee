@@ -1,50 +1,30 @@
-// Embedding pipeline. Isolated here so swapping providers — hosted API
-// now, local model later — only touches this file.
+// Local, free embedding pipeline using fastembed-rs — a small (~90MB)
+// ONNX embedding model that runs on CPU with no API key and no cost.
+// Good for testing the pipeline end to end before deciding whether
+// to pay for a hosted API's better embedding quality later.
+//
+// Swap back to a hosted API (see embed_hosted.rs.bak) once you want
+// higher-quality embeddings — the function signature is identical,
+// so main.rs doesn't need to change either way.
 
-use serde::{Deserialize, Serialize};
+use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
+use std::sync::OnceLock;
 
-#[derive(Serialize)]
-struct EmbedRequest<'a> {
-    input: Vec<&'a str>,
-    model: &'a str,
+static MODEL: OnceLock<TextEmbedding> = OnceLock::new();
+
+fn get_model() -> &'static TextEmbedding {
+    MODEL.get_or_init(|| {
+        // Downloads the model once on first run (~90MB) and caches it
+        // locally after that — every run after the first is offline.
+        TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
+        )
+        .expect("failed to load local embedding model")
+    })
 }
 
-#[derive(Deserialize)]
-struct EmbedResponse {
-    data: Vec<EmbedDatum>,
+pub async fn embed_text(text: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    let model = get_model();
+    let embeddings = model.embed(vec![text], None)?;
+    Ok(embeddings.into_iter().next().unwrap())
 }
-
-#[derive(Deserialize)]
-struct EmbedDatum {
-    embedding: Vec<f32>,
-}
-
-/// A stub for generating text embeddings using the Voyage AI API.
-/// This function currently handles one text input at a time.
-/// It expects the VOYAGE_API_KEY environment variable to be set.
-pub async fn embed_text(text: &str) -> Result<Vec<f32>, reqwest::Error> {
-    let api_key = std::env::var("VOYAGE_API_KEY").expect(
-        "VOYAGE_API_KEY not set — copy .env.example to .env and add your key",
-    );
-
-    let client = reqwest::Client::new();
-    let body = EmbedRequest {
-        input: vec![text],
-        model: "voyage-3-lite", // cheaper/faster model, fine for a v0
-    };
-
-    let response = client
-        .post("https://api.voyageai.com/v1/embeddings")
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await?
-        .json::<EmbedResponse>()
-        .await?;
-
-    Ok(response.data.into_iter().next().unwrap().embedding)
-}
-
-// TODO next: batch multiple documents into one request instead of
-// embedding one at a time — Voyage's API accepts an array of inputs,
-// and batching will matter a lot once you're indexing real folders.
