@@ -585,6 +585,93 @@ pub fn write_serialized_atomic(dest: &Path, json: &str) -> Result<(), String> {
     write_serialized_atomic_with_rename(dest, json.as_bytes(), fs_rename)
 }
 
+/// Outcome of a legacy index migration attempt. Paths are explicit so
+/// the helper stays independent of Tauri state and unit-testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationOutcome {
+    /// Legacy bytes were copied atomically to the new location.
+    Migrated,
+    /// The new location already has an index; nothing was copied.
+    SkippedDestinationExists,
+    /// No legacy index exists; nothing was copied.
+    SkippedNoLegacy,
+}
+
+/// Copy a legacy saved index to a new location exactly once. Never
+/// overwrites an existing destination and never modifies or deletes the
+/// legacy source. Publication is no-replace: the copy is fully written
+/// and flushed to a temporary file first, then published with a hard
+/// link that fails if the destination appeared in the meantime, in
+/// which case the destination is left untouched. Callers must load the
+/// destination through the normal loader afterwards so validation and
+/// quarantine still apply.
+pub fn migrate_legacy_index(new_path: &Path, legacy_path: &Path) -> Result<MigrationOutcome, String> {
+    if fs::metadata(new_path).is_ok() {
+        return Ok(MigrationOutcome::SkippedDestinationExists);
+    }
+    let legacy_bytes = match fs::read(legacy_path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MigrationOutcome::SkippedNoLegacy)
+        }
+        Err(e) => {
+            return Err(format!(
+                "could not read legacy index {}: {e}",
+                legacy_path.display()
+            ))
+        }
+    };
+    publish_new_file_no_replace(new_path, &legacy_bytes)
+}
+
+/// Atomically publish a new file only if the destination is still
+/// absent. Used only for migration; normal index saves intentionally
+/// replace the current index and keep using the overwriting rename.
+fn publish_new_file_no_replace(dest: &Path, bytes: &[u8]) -> Result<MigrationOutcome, String> {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| format!("index path {} has no parent directory", dest.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("could not create index directory {}: {e}", parent.display()))?;
+    let tmp = unique_tmp_path(dest);
+    let write_result: std::io::Result<()> = (|| {
+        let mut file = fs_create_tmp(&tmp)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("could not write temporary index {}: {e}", tmp.display()));
+    }
+    match fs::hard_link(&tmp, dest) {
+        Ok(()) => {
+            let _ = fs::remove_file(&tmp);
+            Ok(MigrationOutcome::Migrated)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&tmp);
+            // Another publisher won the race: confirm the destination is
+            // really there and leave its bytes untouched.
+            if fs::metadata(dest).is_ok() {
+                return Ok(MigrationOutcome::SkippedDestinationExists);
+            }
+            Err(format!(
+                "could not publish migrated index {}: {e}",
+                dest.display()
+            ))
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(format!(
+                "could not publish migrated index {}: {e}",
+                dest.display()
+            ))
+        }
+    }
+}
+
 fn fs_rename(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::rename(from, to)
 }
@@ -1829,6 +1916,172 @@ mod tests {
         assert!(file_a1.exists());
         assert!(file_a2.exists());
         assert!(file_b.exists());
+    }
+
+    fn migration_paths(case: &str) -> (PathBuf, PathBuf) {
+        let base = test_dir(case);
+        let new_dir = base.join("new-id");
+        let legacy_dir = base.join("com.example.deepsearch");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        (new_dir.join(INDEX_FILE_NAME), legacy_dir.join(INDEX_FILE_NAME))
+    }
+
+    fn seed_index(dest: &Path, version: u32, folders: Option<serde_json::Value>) {
+        let mut value = serde_json::json!({
+            "version": version,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [{ "path": "D:\\Docs\\a.txt", "content": "x", "vector": vec384(1.0) }]
+        });
+        if let Some(f) = folders {
+            value["folders"] = f;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).expect("parent dir");
+        }
+        std::fs::write(dest, serde_json::to_string(&value).unwrap()).expect("seed index");
+    }
+
+    #[test]
+    fn migration_copies_legacy_and_preserves_source() {
+        let (new_path, legacy_path) = migration_paths("migrate-ok");
+        seed_index(&legacy_path, 2, Some(serde_json::json!(["D:\\Docs"])));
+        let outcome = migrate_legacy_index(&new_path, &legacy_path).expect("migrate");
+        assert_eq!(outcome, MigrationOutcome::Migrated);
+        assert_eq!(
+            std::fs::read(&new_path).expect("new bytes"),
+            std::fs::read(&legacy_path).expect("legacy bytes")
+        );
+        // Loading the migrated copy retains entries and registrations.
+        let loaded = match VectorStore::load_from_path(&new_path).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert_eq!(loaded.registered_folders(), vec!["D:\\Docs".to_string()]);
+    }
+
+    #[test]
+    fn migration_never_overwrites_existing_destination() {
+        let (new_path, legacy_path) = migration_paths("migrate-keep");
+        seed_index(&new_path, 2, Some(serde_json::json!(["E:\\Other"])));
+        seed_index(&legacy_path, 1, None);
+        let before_new = std::fs::read(&new_path).expect("new bytes");
+        let before_legacy = std::fs::read(&legacy_path).expect("legacy bytes");
+        let outcome = migrate_legacy_index(&new_path, &legacy_path).expect("migrate");
+        assert_eq!(outcome, MigrationOutcome::SkippedDestinationExists);
+        assert_eq!(std::fs::read(&new_path).expect("new after"), before_new);
+        assert_eq!(
+            std::fs::read(&legacy_path).expect("legacy after"),
+            before_legacy
+        );
+    }
+
+    #[test]
+    fn migration_skips_cleanly_when_both_absent() {
+        let (new_path, legacy_path) = migration_paths("migrate-empty");
+        let missing_legacy = legacy_path.with_file_name("no-such-index.json");
+        let outcome = migrate_legacy_index(&new_path, &missing_legacy).expect("migrate");
+        assert_eq!(outcome, MigrationOutcome::SkippedNoLegacy);
+        assert!(!new_path.exists());
+    }
+
+    #[test]
+    fn migration_failure_preserves_source_and_creates_no_destination() {
+        let base = test_dir("migrate-fail");
+        let legacy_dir = base.join("com.example.deepsearch");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        let new_path = base.join("new-id").join(INDEX_FILE_NAME);
+        // A directory cannot be read as an index file: deterministic failure.
+        let result = migrate_legacy_index(&new_path, &legacy_dir);
+        assert!(result.is_err());
+        assert!(!new_path.exists());
+        // The source is preserved and still a directory.
+        assert!(legacy_dir.is_dir());
+        // A genuine legacy file stays recoverable after an unrelated
+        // failure: point the destination somewhere uncreatable (nested
+        // under a regular file) so the atomic write cannot proceed.
+        let base = test_dir("migrate-recover");
+        let blocker = base.join("blocker.txt");
+        std::fs::write(&blocker, "not a directory").expect("blocker");
+        let legacy = base.join("legacy").join(INDEX_FILE_NAME);
+        seed_index(&legacy, 1, None);
+        let legacy_bytes = std::fs::read(&legacy).expect("legacy bytes");
+        let bad_new = blocker.join(INDEX_FILE_NAME);
+        assert!(migrate_legacy_index(&bad_new, &legacy).is_err());
+        assert!(!bad_new.exists());
+        assert_eq!(std::fs::read(&legacy).expect("legacy after"), legacy_bytes);
+        let loaded = match VectorStore::load_from_path(&legacy).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+    }
+
+    #[test]
+    fn migrated_v1_and_v2_indexes_load_normally() {
+        for (case, version, folders) in [
+            ("migrate-v1", 1, None),
+            (
+                "migrate-v2",
+                2,
+                Some(serde_json::json!(["D:\\Docs", "d:/docs\\", "rel\\Docs", ""])),
+            ),
+        ] {
+            let (new_path, legacy_path) = migration_paths(case);
+            seed_index(&legacy_path, version, folders);
+            migrate_legacy_index(&new_path, &legacy_path).expect("migrate");
+            let loaded = match VectorStore::load_from_path(&new_path).expect("load") {
+                LoadOutcome::Loaded(s) => s,
+                other => panic!("expected Loaded for {case}, got {}", outcome_name(&other)),
+            };
+            assert_eq!(loaded.entry_count(), 1);
+            if version == 1 {
+                assert!(loaded.list_folders().is_empty());
+            } else {
+                // Duplicates collapse and invalid paths are sanitized.
+                assert_eq!(loaded.registered_folders(), vec!["D:\\Docs".to_string()]);
+            }
+            // The legacy source is retained for rollback in both cases.
+            assert!(legacy_path.exists());
+        }
+    }
+
+    #[test]
+    fn no_replace_publish_writes_complete_copy() {
+        let dir = test_dir("no-replace-ok");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let outcome = publish_new_file_no_replace(&dest, b"payload").expect("publish");
+        assert_eq!(outcome, MigrationOutcome::Migrated);
+        assert_eq!(std::fs::read(&dest).expect("dest bytes"), b"payload");
+        let strays: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(strays.is_empty());
+    }
+
+    #[test]
+    fn no_replace_publish_never_overwrites_existing_destination() {
+        // Destination already present at publication time: this is exactly
+        // the state a lost check-to-publish race would leave behind, so it
+        // deterministically proves the primitive cannot overwrite.
+        let dir = test_dir("no-replace-race");
+        let dest = dir.join(INDEX_FILE_NAME);
+        std::fs::write(&dest, b"original-bytes").expect("seed dest");
+        let outcome = publish_new_file_no_replace(&dest, b"staged-bytes").expect("publish");
+        assert_eq!(outcome, MigrationOutcome::SkippedDestinationExists);
+        assert_eq!(
+            std::fs::read(&dest).expect("dest bytes"),
+            b"original-bytes"
+        );
+        let strays: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(strays.is_empty());
     }
 
     fn outcome_name(outcome: &LoadOutcome) -> &'static str {

@@ -5,7 +5,7 @@ mod embed;
 mod store;
 mod watcher;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use store::{LoadOutcome, VectorStore};
 use tauri::{Manager, State};
@@ -191,6 +191,25 @@ fn index_file_path(app: &tauri::App) -> Result<PathBuf, String> {
     Ok(dir.join(store::INDEX_FILE_NAME))
 }
 
+/// Identifier used before the Searchiee rebrand. Kept only to locate a
+/// legacy index for one-time migration; the legacy file is never
+/// modified or deleted.
+const LEGACY_INDEX_IDENTIFIER: &str = "com.example.deepsearch";
+const CURRENT_INDEX_IDENTIFIER: &str = "io.github.arjunmaybe.searchiee";
+
+/// Derive the legacy index path from the current one by swapping only
+/// the final directory component when it exactly matches the current
+/// identifier. Returns `None` rather than guessing otherwise.
+fn legacy_index_path(new_index: &Path) -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    let dir = new_index.parent()?;
+    if dir.file_name() != Some(OsStr::new(CURRENT_INDEX_IDENTIFIER)) {
+        return None;
+    }
+    let parent = dir.parent()?;
+    Some(parent.join(LEGACY_INDEX_IDENTIFIER).join(store::INDEX_FILE_NAME))
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -203,33 +222,78 @@ fn main() {
                         )),
                         None,
                     ),
-                    Ok(index_path) => match VectorStore::load_from_path(&index_path) {
-                        Ok(LoadOutcome::Empty) => (VectorStore::new(), None, Some(index_path)),
-                        Ok(LoadOutcome::Loaded(store)) => (store, None, Some(index_path)),
-                        Ok(LoadOutcome::Quarantined {
-                            store,
-                            notice,
-                            quarantine_succeeded: true,
-                        }) => (store, Some(notice), Some(index_path)),
-                        Ok(LoadOutcome::Quarantined {
-                            store,
-                            notice,
-                            quarantine_succeeded: false,
-                        }) => (
-                            store,
-                            Some(format!(
-                                "{notice} Persistence remains disabled this session; indexing will work in memory only."
-                            )),
-                            None,
-                        ),
-                        Err(e) => (
-                            VectorStore::new(),
-                            Some(format!(
-                                "Saved search index could not be read ({e}); persistence is disabled this session to protect the existing file. Search and indexing still work in memory. No files were changed."
-                            )),
-                            None,
-                        ),
-                    },
+                    Ok(index_path) => 'setup_index: {
+                        let migration_notice = match legacy_index_path(&index_path) {
+                            Some(legacy) => {
+                                match store::migrate_legacy_index(&index_path, &legacy) {
+                                    Ok(store::MigrationOutcome::Migrated) => Some(format!(
+                                        "Migrated the saved index from {}. The original was kept as a backup.",
+                                        legacy.display()
+                                    )),
+                                    Ok(_) => None,
+                                    Err(e) => {
+                                        // Persistence stays disabled so a later
+                                        // indexing pass cannot create the new
+                                        // file and permanently skip the legacy
+                                        // index; restart to retry migration.
+                                        break 'setup_index (
+                                            VectorStore::new(),
+                                            Some(format!(
+                                                "Could not migrate the previous search index from {} ({e}); persistence is disabled this session and the old file was left untouched. Fix the problem and restart to retry migration.",
+                                                legacy.display()
+                                            )),
+                                            None,
+                                        );
+                                    }
+                                }
+                            }
+                            None => None,
+                        };
+                        let loaded = match VectorStore::load_from_path(&index_path) {
+                            Ok(LoadOutcome::Empty) => (VectorStore::new(), None, Some(index_path)),
+                            Ok(LoadOutcome::Loaded(store)) => (store, None, Some(index_path)),
+                            Ok(LoadOutcome::Quarantined {
+                                store,
+                                notice,
+                                quarantine_succeeded: true,
+                            }) => (store, Some(notice), Some(index_path)),
+                            Ok(LoadOutcome::Quarantined {
+                                store,
+                                notice,
+                                quarantine_succeeded: false,
+                            }) => (
+                                store,
+                                Some(format!(
+                                    "{notice} Persistence remains disabled this session; indexing will work in memory only."
+                                )),
+                                None,
+                            ),
+                            Err(e) => {
+                                // A successful migration creates the new file
+                                // first, so "no files were changed" would be
+                                // false in that case; only claim it when no
+                                // migration occurred.
+                                let suffix = match &migration_notice {
+                                    Some(_) => "A migrated copy was created; the legacy original was left untouched.",
+                                    None => "No files were changed.",
+                                };
+                                (
+                                    VectorStore::new(),
+                                    Some(format!(
+                                        "Saved search index could not be read ({e}); persistence is disabled this session to protect the existing file. Search and indexing still work in memory. {suffix}"
+                                    )),
+                                    None,
+                                )
+                            }
+                        };
+                        match (loaded, migration_notice) {
+                            ((store, None, path), notice) => (store, notice, path),
+                            ((store, Some(first), path), Some(second)) => {
+                                (store, Some(format!("{first} {second}")), path)
+                            }
+                            ((store, Some(only), path), None) => (store, Some(only), path),
+                        }
+                    }
                 };
             app.manage(AppState {
                 store: Mutex::new(store),
@@ -249,5 +313,33 @@ fn main() {
             get_startup_notice
         ])
         .run(tauri::generate_context!())
-        .expect("error while running deep-search");
+        .expect("error while running Searchiee");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_legacy_path_for_expected_identifier() {
+        let new = PathBuf::from(
+            "D:\\Users\\x\\AppData\\Local\\io.github.arjunmaybe.searchiee\\index-v1.json",
+        );
+        let expected = PathBuf::from(
+            "D:\\Users\\x\\AppData\\Local\\com.example.deepsearch\\index-v1.json",
+        );
+        assert_eq!(legacy_index_path(&new), Some(expected));
+    }
+
+    #[test]
+    fn rejects_non_matching_final_component() {
+        let other = PathBuf::from("D:\\Data\\something-else\\index-v1.json");
+        assert_eq!(legacy_index_path(&other), None);
+    }
+
+    #[test]
+    fn rejects_paths_without_parent_structure() {
+        assert_eq!(legacy_index_path(Path::new("index-v1.json")), None);
+        assert_eq!(legacy_index_path(Path::new("D:\\index-v1.json")), None);
+    }
 }

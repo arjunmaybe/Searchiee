@@ -1,7 +1,7 @@
 {
-  "productName": "deep-search",
+  "productName": "Searchiee",
   "version": "0.1.0",
-  "identifier": "com.example.deepsearch",
+  "identifier": "io.github.arjunmaybe.searchiee",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "deep-search",
+        "title": "Searchiee",
         "width": 720,
         "height": 480,
         "resizable": true
@@ -21,6 +21,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": ["icons/icon.ico"]
   }
 }
