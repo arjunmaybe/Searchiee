@@ -55,11 +55,52 @@
         background: #1a1a1a;
         color: #eee;
       }
+      #folders {
+        margin-top: 12px;
+      }
+      #folders-hint {
+        margin-top: 12px;
+        font-size: 12px;
+        color: #888;
+      }
+      .folder-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+        border-bottom: 1px solid #2a2a2a;
+        font-size: 13px;
+      }
+      .folder-path {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #eee;
+      }
+      .folder-count {
+        color: #888;
+        white-space: nowrap;
+      }
+      .folder-row button {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid #444;
+        background: #222;
+        color: #eee;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <input id="query" type="text" placeholder="Search your indexed files..." />
     <button id="index-btn">Index a folder</button>
+    <div id="folders"></div>
+    <p id="folders-hint">
+      Results indexed before folder management remain searchable. Add a
+      folder again to refresh or remove its files. Removing a folder only
+      removes its index entries; original files stay on disk.
+    </p>
     <div id="notice" hidden></div>
     <div id="results"></div>
     <script type="module" src="/src/main.ts"></script>

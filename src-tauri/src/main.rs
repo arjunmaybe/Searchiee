@@ -25,13 +25,99 @@ struct AppState {
 
 #[tauri::command]
 async fn index_folder(path: String, state: State<'_, AppState>) -> Result<usize, String> {
+    run_index_pipeline(&path, false, &state).await
+}
+
+#[tauri::command]
+async fn refresh_folder(path: String, state: State<'_, AppState>) -> Result<usize, String> {
+    run_index_pipeline(&path, true, &state).await
+}
+
+#[tauri::command]
+fn list_folders(state: State<'_, AppState>) -> Result<Vec<store::FolderInfo>, String> {
+    let store = state
+        .store
+        .lock()
+        .map_err(|e| format!("search index is unavailable: {e}"))?;
+    Ok(store.list_folders())
+}
+
+#[tauri::command]
+async fn remove_folder(path: String, state: State<'_, AppState>) -> Result<usize, String> {
+    let _op_guard = state.index_op_lock.lock().await;
+    let root = std::path::PathBuf::from(path.trim());
+    // Removal needs no filesystem access: the folder may already be
+    // offline. Identity is purely normalized, so any spelling works.
+    let persist_path: PathBuf = match state.index_path.clone() {
+        Some(p) => p,
+        None => {
+            let removed = state
+                .store
+                .lock()
+                .map_err(|e| format!("search index is unavailable: {e}"))?
+                .remove_folder(&root)?;
+            return Err(format!(
+                "Removed {removed} indexed files in memory, but the persistent index is unavailable this session, so the change cannot be saved and may reappear after restart."
+            ));
+        }
+    };
+    let _save_guard = state
+        .save_lock
+        .lock()
+        .map_err(|e| format!("could not save search index: index is unavailable: {e}"))?;
+    let (removed, snapshot) = {
+        let mut store = state
+            .store
+            .lock()
+            .map_err(|e| format!("could not save search index: index is unavailable: {e}"))?;
+        let removed = store.remove_folder(&root)?;
+        let snapshot = store.serialize()?;
+        (removed, snapshot)
+    };
+    match store::write_serialized_atomic(&persist_path, &snapshot) {
+        Ok(()) => Ok(removed),
+        Err(e) => Err(format!(
+            "Removed {removed} indexed files in memory, but saving the persistent index failed: {e}. They may reappear after restart."
+        )),
+    }
+}
+
+/// Shared indexing pipeline: fail-closed scan, staged embeddings, then
+/// atomic reconcile-plus-register and atomic save. When
+/// `require_registered` is set, unregistered roots are rejected after
+/// the scan but before any embedding work mutates nothing.
+async fn run_index_pipeline(
+    input: &str,
+    require_registered: bool,
+    state: &AppState,
+) -> Result<usize, String> {
     // Held across validation, scan, embedding, reconciliation, and save.
     // Nothing here is captured before this lock; overlapping calls queue
     // and the later scan always commits last.
     let _op_guard = state.index_op_lock.lock().await;
 
     // Stage first without touching the live store.
-    let scan = watcher::scan_folder(&path).map_err(|e| e.to_string())?;
+    let scan = watcher::scan_folder(input).map_err(|e| e.to_string())?;
+    if require_registered {
+        let registered = state
+            .store
+            .lock()
+            .map_err(|e| format!("search index is unavailable: {e}"))?
+            .is_registered(&scan.root);
+        if !registered {
+            return Err(format!(
+                "Folder is not registered: {}. Add it again to index it.",
+                scan.root.display()
+            ));
+        }
+    }
+    let display = watcher::storage_path(&scan.root);
+    if store::path_key(&display).is_none() {
+        return Err(format!(
+            "Folder has ambiguous identity ({}); refusing to index",
+            scan.root.display()
+        ));
+    }
     let mut staged: Vec<store::StagedDoc> = Vec::with_capacity(scan.docs.len());
     for doc in scan.docs {
         let vector = embed::embed_text(&doc.content).await.map_err(|e| e.to_string())?;
@@ -55,8 +141,7 @@ async fn index_folder(path: String, state: State<'_, AppState>) -> Result<usize,
                 .store
                 .lock()
                 .map_err(|e| format!("search index is unavailable: {e}"))?
-                .reconcile(&scan.root, staged)
-                .map_err(|e| e.to_string())?;
+                .reconcile_and_register(&scan.root, &display, staged)?;
             return Err(format!(
                 "Indexed {staged_len} files in memory, but the persistent index is unavailable this session, so changes cannot be saved and may be lost after restart. Search works for now; restart the app and re-index to retry."
             ));
@@ -71,7 +156,7 @@ async fn index_folder(path: String, state: State<'_, AppState>) -> Result<usize,
             .store
             .lock()
             .map_err(|e| format!("could not save search index: index is unavailable: {e}"))?;
-        store.reconcile(&scan.root, staged)?;
+        store.reconcile_and_register(&scan.root, &display, staged)?;
         store.serialize()?
     };
     match store::write_serialized_atomic(&persist_path, &snapshot) {
@@ -155,7 +240,14 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![index_folder, search, get_startup_notice])
+        .invoke_handler(tauri::generate_handler![
+            index_folder,
+            refresh_folder,
+            remove_folder,
+            list_folders,
+            search,
+            get_startup_notice
+        ])
         .run(tauri::generate_context!())
         .expect("error while running deep-search");
 }

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const INDEX_SCHEMA_VERSION: u32 = 1;
+pub const INDEX_SCHEMA_VERSION: u32 = 2;
 /// Stable identifier for the current local embedding model
 /// (`fastembed::EmbeddingModel::AllMiniLML6V2`).
 pub const INDEX_MODEL_ID: &str = "all-MiniLM-L6-v2";
@@ -35,6 +35,13 @@ struct Entry {
 
 pub struct VectorStore {
     entries: Vec<Entry>,
+    folders: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct FolderInfo {
+    pub path: String,
+    pub file_count: usize,
 }
 
 #[derive(Serialize)]
@@ -187,6 +194,8 @@ struct SavedIndex {
     model: String,
     dim: usize,
     entries: Vec<SavedEntry>,
+    #[serde(default)]
+    folders: Vec<String>,
 }
 
 pub enum LoadOutcome {
@@ -204,7 +213,132 @@ pub enum LoadOutcome {
 
 impl VectorStore {
     pub fn new() -> Self {
-        VectorStore { entries: Vec::new() }
+        VectorStore {
+            entries: Vec::new(),
+            folders: Vec::new(),
+        }
+    }
+
+    /// Number of indexed documents (used by tests and diagnostics).
+    #[allow(dead_code)]
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Registered folder display paths in stored order.
+    #[allow(dead_code)]
+    pub fn registered_folders(&self) -> Vec<String> {
+        self.folders.clone()
+    }
+
+    /// Registered folders with live per-folder file counts, sorted
+    /// deterministically by normalized key. Counts are derived from
+    /// entries, never persisted.
+    pub fn list_folders(&self) -> Vec<FolderInfo> {
+        let mut keyed: Vec<(String, String)> = Vec::with_capacity(self.folders.len());
+        for display in &self.folders {
+            if let Some(key) = path_key(display) {
+                keyed.push((key, display.clone()));
+            }
+        }
+        keyed.sort_by(|a, b| a.0.cmp(&b.0));
+        keyed
+            .into_iter()
+            .map(|(key, display)| FolderInfo {
+                path: display,
+                file_count: self.count_in_root(&key),
+            })
+            .collect()
+    }
+
+    fn count_in_root(&self, root_key: &str) -> usize {
+        self.entries
+            .iter()
+            .filter_map(|e| path_key(&e.path))
+            .filter(|k| is_in_root(k, root_key))
+            .count()
+    }
+
+    /// True when the given root (any spelling) is registered.
+    pub fn is_registered(&self, root: &Path) -> bool {
+        let key = match path_key(&root.to_string_lossy()) {
+            Some(k) => k,
+            None => return false,
+        };
+        self.folders.iter().any(|f| path_key(f).as_deref() == Some(&key))
+    }
+
+    /// Upsert a folder registration by normalized identity, refreshing
+    /// the display spelling. Returns true when a new entry was added.
+    /// Never matches ambiguous paths. Call only after the indexing pass
+    /// validated; fails without mutating on ambiguous input.
+    fn register_display(&mut self, display: &str) -> Result<bool, String> {
+        let key = path_key(display).ok_or_else(|| {
+            format!("folder has ambiguous identity ({display}); refusing to register")
+        })?;
+        if let Some(existing) = self
+            .folders
+            .iter_mut()
+            .find(|f| path_key(f).as_deref() == Some(&key))
+        {
+            *existing = display.to_string();
+            Ok(false)
+        } else {
+            self.folders.push(display.to_string());
+            Ok(true)
+        }
+    }
+
+    /// Validate root, display, and staged paths, then atomically apply
+    /// entry reconciliation plus folder registration. Any validation
+    /// failure leaves both entries and registrations unchanged.
+    pub fn reconcile_and_register(
+        &mut self,
+        root: &Path,
+        display: &str,
+        staged: Vec<StagedDoc>,
+    ) -> Result<usize, String> {
+        let root_key = path_key(&root.to_string_lossy()).ok_or_else(|| {
+            format!(
+                "selected folder has ambiguous identity ({}); refusing to reconcile",
+                root.display()
+            )
+        })?;
+        let display_key = path_key(display).ok_or_else(|| {
+            format!("folder has ambiguous identity ({display}); refusing to reconcile")
+        })?;
+        // Display must denote the same folder as the canonical root.
+        if display_key != root_key {
+            return Err(format!(
+                "folder display ({display}) does not match scanned folder ({}); refusing to reconcile",
+                root.display()
+            ));
+        }
+        let n = self.reconcile(root, staged)?;
+        // Registration cannot fail after the pre-validation above.
+        self.register_display(display)
+            .map_err(|e| format!("could not register folder: {e}"))?;
+        Ok(n)
+    }
+
+    /// Remove a folder registration and all in-root entries. Files on
+    /// disk are never touched. Ambiguous roots are rejected without
+    /// mutation; unknown-but-valid roots return 0 removals.
+    pub fn remove_folder(&mut self, root: &Path) -> Result<usize, String> {
+        let root_key = path_key(&root.to_string_lossy()).ok_or_else(|| {
+            format!(
+                "folder has ambiguous identity ({}); refusing to remove",
+                root.display()
+            )
+        })?;
+        let before = self.entries.len();
+        self.entries.retain(|e| match path_key(&e.path) {
+            None => true,
+            Some(k) => !is_in_root(&k, &root_key),
+        });
+        self.folders
+            .retain(|f| path_key(f).as_deref() != Some(&root_key));
+        Ok(before - self.entries.len())
     }
 
     /// Path-based upsert using the shared normalized identity. Only two
@@ -320,14 +454,17 @@ impl VectorStore {
                     vector: e.vector.clone(),
                 })
                 .collect(),
+            folders: self.folders.clone(),
         };
         serde_json::to_string(&saved).map_err(|e| format!("could not serialize index: {e}"))
     }
 
-    /// Validate a parsed envelope and convert it. Rejects the whole
-    /// index on any mismatch; never returns a partially mixed store.
+    /// Validate a parsed envelope and convert it. v1 envelopes (no
+    /// folders field) load entries with an empty registry. v2 envelopes
+    /// load entries strictly and sanitize duplicate or ambiguous folder
+    /// paths without discarding valid entries. Anything else quarantines.
     fn from_saved(saved: SavedIndex) -> Result<Self, String> {
-        if saved.version != INDEX_SCHEMA_VERSION {
+        if saved.version != 1 && saved.version != INDEX_SCHEMA_VERSION {
             return Err(format!(
                 "unsupported index version {} (expected {})",
                 saved.version, INDEX_SCHEMA_VERSION
@@ -365,6 +502,22 @@ impl VectorStore {
                 content: e.content,
                 vector: e.vector,
             });
+        }
+        if saved.version == 1 {
+            return Ok(store);
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        for folder in saved.folders {
+            if folder.trim().is_empty() {
+                continue;
+            }
+            let key = match path_key(&folder) {
+                Some(k) => k,
+                None => continue,
+            };
+            if seen.insert(key) {
+                store.folders.push(folder);
+            }
         }
         Ok(store)
     }
@@ -1323,6 +1476,254 @@ mod tests {
         assert_eq!(guard.entries.len(), 1);
         assert_eq!(guard.entries[0].path, "D:\\Docs\\new.txt");
         assert_eq!(guard.entries[0].content, "new");
+    }
+
+    #[test]
+    fn registry_round_trip_persists_folders_and_entries() {
+        let dir = test_dir("registry-rt");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+            )
+            .expect("register docs");
+        store
+            .reconcile_and_register(&root("E:\\Empty"), "E:\\Empty", vec![])
+            .expect("register empty");
+        store.save_to_path(&dest).expect("save");
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        let folders = loaded.list_folders();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].path, "D:\\Docs");
+        assert_eq!(folders[0].file_count, 1);
+        assert_eq!(folders[1].path, "E:\\Empty");
+        assert_eq!(folders[1].file_count, 0);
+        assert_eq!(loaded.entry_count(), 1);
+    }
+
+    #[test]
+    fn v1_index_loads_entries_with_empty_registry() {
+        let dir = test_dir("v1compat");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let v1 = serde_json::json!({
+            "version": 1,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [{ "path": "D:\\Docs\\a.txt", "content": "x", "vector": vec384(1.0) }]
+        });
+        std::fs::write(&dest, serde_json::to_string(&v1).unwrap()).expect("seed v1");
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert!(loaded.list_folders().is_empty());
+        assert!(loaded.registered_folders().is_empty());
+    }
+
+    #[test]
+    fn folder_registration_deduplicates_equivalent_paths() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+            )
+            .expect("first");
+        store
+            .reconcile_and_register(
+                &root("d:/docs\\"),
+                "d:/docs\\",
+                vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+            )
+            .expect("second");
+        assert_eq!(store.registered_folders().len(), 1);
+        assert_eq!(store.registered_folders()[0], "d:/docs\\");
+        assert!(store.is_registered(&root("D:\\DOCS")));
+        assert_eq!(store.entry_count(), 1);
+    }
+
+    #[test]
+    fn folder_counts_cover_empty_and_nested_roots() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![
+                    staged("D:\\Docs\\a.txt", "a", 1.0),
+                    staged("D:\\Docs\\sub\\b.txt", "b", 2.0),
+                ],
+            )
+            .expect("docs");
+        store
+            .reconcile_and_register(&root("E:\\Empty"), "E:\\Empty", vec![])
+            .expect("empty");
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs\\sub"),
+                "D:\\Docs\\sub",
+                vec![staged("D:\\Docs\\sub\\b.txt", "b", 2.0)],
+            )
+            .expect("sub");
+        let folders = store.list_folders();
+        assert_eq!(folders.len(), 3);
+        let get = |p: &str| {
+            folders
+                .iter()
+                .find(|f| f.path == p)
+                .unwrap_or_else(|| panic!("missing {p}"))
+                .file_count
+        };
+        // Nested scopes overlap by design: the parent counts sub files too.
+        assert_eq!(get("D:\\Docs"), 2);
+        assert_eq!(get("D:\\Docs\\sub"), 1);
+        assert_eq!(get("E:\\Empty"), 0);
+    }
+
+    #[test]
+    fn remove_folder_is_root_scoped() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+            )
+            .expect("docs");
+        store
+            .reconcile_and_register(
+                &root("E:\\Other"),
+                "E:\\Other",
+                vec![staged("E:\\Other\\b.txt", "b", 2.0)],
+            )
+            .expect("other");
+        let removed = store.remove_folder(&root("D:\\Docs")).expect("remove");
+        assert_eq!(removed, 1);
+        assert_eq!(store.entry_count(), 1);
+        let folders = store.list_folders();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].path, "E:\\Other");
+        assert_eq!(folders[0].file_count, 1);
+    }
+
+    #[test]
+    fn remove_folder_leaves_source_files_on_disk() {
+        let base = test_dir("remove-disk");
+        let dir_a = base.join("folderA");
+        let dir_b = base.join("folderB");
+        std::fs::create_dir_all(&dir_a).expect("dirA");
+        std::fs::create_dir_all(&dir_b).expect("dirB");
+        let file_a = dir_a.join("note.txt");
+        let file_b = dir_b.join("keep.txt");
+        std::fs::write(&file_a, "alpha").expect("fileA");
+        std::fs::write(&file_b, "beta").expect("fileB");
+        let display_a = dir_a.to_string_lossy().to_string();
+        let display_b = dir_b.to_string_lossy().to_string();
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &dir_a,
+                &display_a,
+                vec![staged(&file_a.to_string_lossy(), "alpha", 1.0)],
+            )
+            .expect("register A");
+        store
+            .reconcile_and_register(
+                &dir_b,
+                &display_b,
+                vec![staged(&file_b.to_string_lossy(), "beta", 2.0)],
+            )
+            .expect("register B");
+        assert_eq!(store.entry_count(), 2);
+        let removed = store.remove_folder(&dir_a).expect("remove A");
+        assert_eq!(removed, 1);
+        assert_eq!(store.entry_count(), 1);
+        // Source files are untouched: removal is index-only.
+        assert!(file_a.exists());
+        assert!(file_b.exists());
+        assert_eq!(file_a.metadata().expect("meta").len(), 5);
+    }
+
+    #[test]
+    fn ambiguous_folder_identity_rejected_without_mutation() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+            )
+            .expect("seed");
+        let before = store.serialize().expect("snapshot");
+        assert!(store
+            .reconcile_and_register(&root("rel\\Docs"), "rel\\Docs", vec![])
+            .is_err());
+        assert!(store.remove_folder(&root("C:foo")).is_err());
+        assert!(store.remove_folder(&root("")).is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+        assert_eq!(store.registered_folders().len(), 1);
+    }
+
+    #[test]
+    fn failed_reconciliation_preserves_entries_and_registrations() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+            )
+            .expect("seed");
+        let before = store.serialize().expect("snapshot");
+        let result = store.reconcile_and_register(
+            &root("D:\\Docs"),
+            "D:\\Docs",
+            vec![
+                staged("D:\\Docs\\b.txt", "b", 2.0),
+                staged("C:foo.txt", "x", 1.0),
+            ],
+        );
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+        assert_eq!(store.registered_folders(), vec!["D:\\Docs".to_string()]);
+    }
+
+    #[test]
+    fn registry_and_entries_survive_persistence_reload() {
+        let dir = test_dir("registry-reload");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![
+                    staged("D:\\Docs\\a.txt", "a", 1.0),
+                    staged("D:\\Docs\\sub\\b.txt", "b", 2.0),
+                ],
+            )
+            .expect("docs");
+        store
+            .reconcile_and_register(&root("E:\\Empty"), "E:\\Empty", vec![])
+            .expect("empty");
+        let before = store.serialize().expect("snapshot");
+        store.save_to_path(&dest).expect("save");
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.serialize().expect("reserialize"), before);
+        let folders = loaded.list_folders();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(loaded.entry_count(), 2);
     }
 
     fn outcome_name(outcome: &LoadOutcome) -> &'static str {

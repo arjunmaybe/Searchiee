@@ -104,8 +104,8 @@ pub fn scan_folder(root: &str) -> std::io::Result<ScanOutcome> {
 /// preserving the remainder's spelling. Device-namespace paths
 /// (`\\?\Volume{…}`, `\\?\GLOBALROOT`, `\\.\…`) are preserved as-is so
 /// they stay ambiguous for reconciliation instead of collapsing into an
-/// unrelated path.
-fn storage_path(canonical: &Path) -> String {
+/// unrelated path. Also used for registered folder display paths.
+pub(crate) fn storage_path(canonical: &Path) -> String {
     let s = canonical.to_string_lossy();
     let lower = s.to_lowercase();
     if lower.starts_with("\\\\?\\unc\\") {
