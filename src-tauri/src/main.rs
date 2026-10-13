@@ -13,6 +13,9 @@ use tauri::{Manager, State};
 struct AppState {
     store: Mutex<VectorStore>,
     save_lock: Mutex<()>,
+    /// Serializes whole indexing operations (scan+embed+reconcile+save)
+    /// so an older scan can never commit after a newer one.
+    index_op_lock: tokio::sync::Mutex<()>,
     /// `None` means persistence is disabled for this session: search and
     /// indexing still work in memory, but nothing is written to disk so a
     /// valid-but-unreadable or unquarantinable file can never be clobbered.
@@ -22,18 +25,23 @@ struct AppState {
 
 #[tauri::command]
 async fn index_folder(path: String, state: State<'_, AppState>) -> Result<usize, String> {
-    let docs = watcher::scan_folder(&path).map_err(|e| e.to_string())?;
-    let mut indexed = 0;
+    // Held across validation, scan, embedding, reconciliation, and save.
+    // Nothing here is captured before this lock; overlapping calls queue
+    // and the later scan always commits last.
+    let _op_guard = state.index_op_lock.lock().await;
 
-    for doc in docs {
+    // Stage first without touching the live store.
+    let scan = watcher::scan_folder(&path).map_err(|e| e.to_string())?;
+    let mut staged: Vec<store::StagedDoc> = Vec::with_capacity(scan.docs.len());
+    for doc in scan.docs {
         let vector = embed::embed_text(&doc.content).await.map_err(|e| e.to_string())?;
-        state
-            .store
-            .lock()
-            .map_err(|e| format!("search index is unavailable: {e}"))?
-            .insert(doc.path, doc.content, vector);
-        indexed += 1;
+        staged.push(store::StagedDoc {
+            path: doc.path,
+            content: doc.content,
+            vector,
+        });
     }
+    let staged_len = staged.len();
 
     // Serialize saves through `save_lock` so concurrent index passes
     // commit in order; each snapshot is taken after acquiring the save
@@ -43,8 +51,14 @@ async fn index_folder(path: String, state: State<'_, AppState>) -> Result<usize,
     let persist_path: PathBuf = match state.index_path.clone() {
         Some(p) => p,
         None => {
+            state
+                .store
+                .lock()
+                .map_err(|e| format!("search index is unavailable: {e}"))?
+                .reconcile(&scan.root, staged)
+                .map_err(|e| e.to_string())?;
             return Err(format!(
-                "Indexed {indexed} files in memory, but the persistent index is unavailable this session, so changes cannot be saved and may be lost after restart. Search works for now; restart the app and re-index to retry."
+                "Indexed {staged_len} files in memory, but the persistent index is unavailable this session, so changes cannot be saved and may be lost after restart. Search works for now; restart the app and re-index to retry."
             ));
         }
     };
@@ -52,15 +66,18 @@ async fn index_folder(path: String, state: State<'_, AppState>) -> Result<usize,
         .save_lock
         .lock()
         .map_err(|e| format!("could not save search index: index is unavailable: {e}"))?;
-    let snapshot = state
-        .store
-        .lock()
-        .map_err(|e| format!("could not save search index: index is unavailable: {e}"))?
-        .serialize()?;
+    let snapshot = {
+        let mut store = state
+            .store
+            .lock()
+            .map_err(|e| format!("could not save search index: index is unavailable: {e}"))?;
+        store.reconcile(&scan.root, staged)?;
+        store.serialize()?
+    };
     match store::write_serialized_atomic(&persist_path, &snapshot) {
-        Ok(()) => Ok(indexed),
+        Ok(()) => Ok(staged_len),
         Err(e) => Err(format!(
-            "Indexed {indexed} files in memory, but saving the persistent index failed: {e}. Results will work until the app restarts."
+            "Indexed {staged_len} files in memory, but saving the persistent index failed: {e}. Results will work until the app restarts."
         )),
     }
 }
@@ -132,6 +149,7 @@ fn main() {
             app.manage(AppState {
                 store: Mutex::new(store),
                 save_lock: Mutex::new(()),
+                index_op_lock: tokio::sync::Mutex::new(()),
                 index_path,
                 startup_notice: Mutex::new(notice),
             });

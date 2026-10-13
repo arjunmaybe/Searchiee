@@ -9,6 +9,7 @@
 // as `index-v1.json` and contains full document contents.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,136 @@ pub struct SearchResult {
     pub path: String,
     pub snippet: String,
     pub score: f32,
+}
+
+/// Staged indexing result: scan output plus its embedding. Applied to
+/// the live store only via `reconcile` after the full scan+embed pass
+/// succeeds.
+pub struct StagedDoc {
+    pub path: String,
+    pub content: String,
+    pub vector: Vec<f32>,
+}
+
+/// Normalized identity for an absolute Windows path, or `None` when the
+/// input cannot be scoped safely (relative, drive-relative,
+/// rooted-relative, device-namespace, or otherwise ambiguous). Never
+/// resolves relative inputs against the current working directory.
+pub fn path_key(raw: &str) -> Option<String> {
+    let mut s = raw.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        s = s[1..s.len() - 1].trim();
+    }
+    if s.is_empty() {
+        return None;
+    }
+    let unified = s.replace('/', "\\");
+    let mut l = unified.to_lowercase();
+    if l.starts_with("\\\\?\\unc\\") {
+        let rest = &l["\\\\?\\unc\\".len()..];
+        if rest.is_empty() {
+            return None;
+        }
+        l = format!("\\\\{rest}");
+    } else if l.starts_with("\\\\?\\") {
+        let rest = &l["\\\\?\\".len()..];
+        if rest.len() >= 3
+            && rest.as_bytes()[0].is_ascii_alphabetic()
+            && rest.as_bytes()[1] == b':'
+            && rest.as_bytes()[2] == b'\\'
+        {
+            l = rest.to_string();
+        } else if rest.len() == 2
+            && rest.as_bytes()[0].is_ascii_alphabetic()
+            && rest.as_bytes()[1] == b':'
+        {
+            l = rest.to_string();
+        } else {
+            return None;
+        }
+    } else if l.starts_with("\\\\.\\") {
+        return None;
+    }
+    if l.starts_with("\\\\") {
+        normalize_unc(&l)
+    } else if l.len() >= 3
+        && l.as_bytes()[0].is_ascii_alphabetic()
+        && l.as_bytes()[1] == b':'
+        && l.as_bytes()[2] == b'\\'
+    {
+        normalize_drive(&l)
+    } else {
+        None
+    }
+}
+
+/// Root-boundary check on normalized keys. Equality counts as inside.
+/// A root already ending in `\` (drive root, UNC share root) matches
+/// descendants directly; otherwise descendants require `root + "\\"`,
+/// so `D:\Docs-old` is never inside `D:\Docs`.
+pub fn is_in_root(entry_key: &str, root_key: &str) -> bool {
+    if entry_key == root_key {
+        true
+    } else if root_key.ends_with('\\') {
+        entry_key.starts_with(root_key)
+    } else {
+        entry_key.len() > root_key.len()
+            && entry_key.starts_with(root_key)
+            && entry_key.as_bytes()[root_key.len()] == b'\\'
+    }
+}
+
+fn normalize_drive(l: &str) -> Option<String> {
+    let prefix = &l[..3];
+    let rest = &l[3..];
+    let mut stack: Vec<&str> = Vec::new();
+    for comp in rest.split('\\') {
+        if comp.is_empty() || comp == "." {
+            continue;
+        } else if comp == ".." {
+            stack.pop();
+        } else {
+            stack.push(comp);
+        }
+    }
+    if stack.is_empty() {
+        Some(prefix.to_string())
+    } else {
+        Some(format!("{prefix}{}", stack.join("\\")))
+    }
+}
+
+fn normalize_unc(l: &str) -> Option<String> {
+    let without = &l[2..];
+    let mut stack: Vec<&str> = Vec::new();
+    for comp in without.split('\\') {
+        if comp.is_empty() || comp == "." {
+            continue;
+        } else if comp == ".." {
+            if stack.len() > 2 {
+                stack.pop();
+            } else {
+                return None;
+            }
+        } else {
+            stack.push(comp);
+        }
+    }
+    if stack.len() < 2 {
+        return None;
+    }
+    if stack.len() == 2 {
+        Some(format!("\\\\{}\\{}\\", stack[0], stack[1]))
+    } else {
+        Some(format!("\\\\{}", stack.join("\\")))
+    }
+}
+
+fn paths_match(a: &str, b: &str) -> bool {
+    match (path_key(a), path_key(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -76,13 +207,86 @@ impl VectorStore {
         VectorStore { entries: Vec::new() }
     }
 
+    /// Path-based upsert using the shared normalized identity. Only two
+    /// valid absolute keys that are equal may match; ambiguous paths
+    /// never match anything and are preserved as distinct entries.
+    #[allow(dead_code)]
     pub fn insert(&mut self, path: String, content: String, vector: Vec<f32>) {
-        if let Some(existing) = self.entries.iter_mut().find(|e| e.path == path) {
+        if let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|e| paths_match(&e.path, &path))
+        {
             existing.content = content;
             existing.vector = vector;
+            existing.path = path;
         } else {
             self.entries.push(Entry { path, content, vector });
         }
+    }
+
+    /// Atomically reconcile the selected absolute root with a completely
+    /// staged set: upsert every staged doc by normalized identity, then
+    /// drop in-root entries absent from the staged set. Unrelated roots
+    /// and ambiguous legacy entries are always retained. Validates all
+    /// keys before mutating, so an ambiguous root or staged path aborts
+    /// without changing the store.
+    pub fn reconcile(&mut self, root: &Path, staged: Vec<StagedDoc>) -> Result<usize, String> {
+        let root_key = path_key(&root.to_string_lossy()).ok_or_else(|| {
+            format!(
+                "selected folder has ambiguous identity ({}); refusing to reconcile",
+                root.display()
+            )
+        })?;
+        let mut staged_keys: HashSet<String> = HashSet::with_capacity(staged.len());
+        let mut staged_with_keys: Vec<(String, StagedDoc)> = Vec::with_capacity(staged.len());
+        for doc in staged {
+            let key = path_key(&doc.path).ok_or_else(|| {
+                format!(
+                    "scanned file has ambiguous identity ({}); refusing to reconcile",
+                    doc.path
+                )
+            })?;
+            staged_keys.insert(key.clone());
+            staged_with_keys.push((key, doc));
+        }
+        for (key, doc) in staged_with_keys {
+            if let Some(existing) = self.entries.iter_mut().find(|e| match path_key(&e.path) {
+                Some(existing_key) => existing_key == key,
+                None => false,
+            }) {
+                existing.content = doc.content;
+                existing.vector = doc.vector;
+                existing.path = doc.path;
+            } else {
+                self.entries.push(Entry {
+                    path: doc.path,
+                    content: doc.content,
+                    vector: doc.vector,
+                });
+            }
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        self.entries.retain_mut(|e| match path_key(&e.path) {
+            None => true,
+            Some(entry_key) => {
+                if is_in_root(&entry_key, &root_key) {
+                    if !staged_keys.contains(&entry_key) {
+                        return false;
+                    }
+                    // Deduplicate previously equivalent paths inside the
+                    // root: the upsert loop updates the first occurrence,
+                    // so keep the first staged key seen and drop the rest.
+                    if !seen.insert(entry_key) {
+                        return false;
+                    }
+                    true
+                } else {
+                    true
+                }
+            }
+        });
+        Ok(staged_keys.len())
     }
 
     pub fn search(&self, query_vector: &[f32], limit: usize) -> Vec<SearchResult> {
@@ -395,8 +599,16 @@ mod tests {
     #[test]
     fn reinserting_same_path_leaves_single_entry() {
         let mut store = VectorStore::new();
-        store.insert("a.txt".to_string(), "hello".to_string(), vec![1.0, 0.0]);
-        store.insert("a.txt".to_string(), "hello".to_string(), vec![1.0, 0.0]);
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "hello".to_string(),
+            vec![1.0, 0.0],
+        );
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "hello".to_string(),
+            vec![1.0, 0.0],
+        );
 
         assert_eq!(store.entries.len(), 1);
         assert_eq!(store.search(&[1.0, 0.0], 10).len(), 1);
@@ -405,8 +617,16 @@ mod tests {
     #[test]
     fn reinserting_same_path_updates_content_and_embedding() {
         let mut store = VectorStore::new();
-        store.insert("a.txt".to_string(), "old".to_string(), vec![1.0, 0.0]);
-        store.insert("a.txt".to_string(), "new".to_string(), vec![0.0, 1.0]);
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "old".to_string(),
+            vec![1.0, 0.0],
+        );
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "new".to_string(),
+            vec![0.0, 1.0],
+        );
 
         assert_eq!(store.entries.len(), 1);
         assert_eq!(store.entries[0].content, "new");
@@ -416,8 +636,16 @@ mod tests {
     #[test]
     fn different_paths_remain_distinct_entries() {
         let mut store = VectorStore::new();
-        store.insert("a.txt".to_string(), "same text".to_string(), vec![1.0, 0.0]);
-        store.insert("b.txt".to_string(), "same text".to_string(), vec![1.0, 0.0]);
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "same text".to_string(),
+            vec![1.0, 0.0],
+        );
+        store.insert(
+            "D:\\Docs\\b.txt".to_string(),
+            "same text".to_string(),
+            vec![1.0, 0.0],
+        );
 
         assert_eq!(store.entries.len(), 2);
         assert_eq!(store.search(&[1.0, 0.0], 10).len(), 2);
@@ -474,14 +702,22 @@ mod tests {
         let dir = test_dir("restart");
         let dest = dir.join(INDEX_FILE_NAME);
         let mut store = VectorStore::new();
-        store.insert("a.txt".to_string(), "hello".to_string(), vec384(1.0));
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "hello".to_string(),
+            vec384(1.0),
+        );
         store.save_to_path(&dest).expect("save");
 
         let mut restarted = match VectorStore::load_from_path(&dest).expect("load") {
             LoadOutcome::Loaded(s) => s,
             other => panic!("expected Loaded, got {}", outcome_name(&other)),
         };
-        restarted.insert("a.txt".to_string(), "hello updated".to_string(), vec384(5.0));
+        restarted.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "hello updated".to_string(),
+            vec384(5.0),
+        );
         assert_eq!(restarted.entries.len(), 1);
         assert_eq!(restarted.entries[0].content, "hello updated");
         assert_eq!(restarted.entries[0].vector, vec384(5.0));
@@ -668,6 +904,425 @@ mod tests {
             LoadOutcome::Empty => {}
             other => panic!("expected Empty, got {}", outcome_name(&other)),
         }
+    }
+
+    fn staged(path: &str, content: &str, fill: f32) -> StagedDoc {
+        StagedDoc {
+            path: path.to_string(),
+            content: content.to_string(),
+            vector: vec384(fill),
+        }
+    }
+
+    fn root(path: &str) -> PathBuf {
+        PathBuf::from(path)
+    }
+
+    #[test]
+    fn reconcile_updates_changed_file_without_duplicating() {
+        let mut store = VectorStore::new();
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "v1".to_string(),
+            vec384(1.0),
+        );
+        let n = store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("D:\\Docs\\a.txt", "v2", 2.0)],
+            )
+            .expect("reconcile");
+        assert_eq!(n, 1);
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].content, "v2");
+        assert_eq!(store.entries[0].vector, vec384(2.0));
+    }
+
+    #[test]
+    fn reconcile_deduplicates_previously_equivalent_paths() {
+        let mut store = VectorStore::new();
+        // Two spellings of the same absolute path, as could accumulate
+        // before normalized matching existed. Push directly to bypass
+        // upsert collapsing and simulate the legacy duplication.
+        store.entries.push(Entry {
+            path: "D:\\Docs\\Note.md".to_string(),
+            content: "stale one".to_string(),
+            vector: vec384(1.0),
+        });
+        store.entries.push(Entry {
+            path: "d:/docs/note.md".to_string(),
+            content: "stale two".to_string(),
+            vector: vec384(1.0),
+        });
+        // An unrelated entry must survive untouched.
+        store.entries.push(Entry {
+            path: "E:\\Other\\keep.txt".to_string(),
+            content: "keep".to_string(),
+            vector: vec384(7.0),
+        });
+        assert_eq!(store.entries.len(), 3);
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("D:\\DOCS\\NOTE.md", "fresh", 4.0)],
+            )
+            .expect("reconcile");
+        let matching: Vec<_> = store
+            .entries
+            .iter()
+            .filter(|e| path_key(&e.path).as_deref() == Some("d:\\docs\\note.md"))
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].content, "fresh");
+        assert_eq!(matching[0].vector, vec384(4.0));
+        assert_eq!(matching[0].path, "D:\\DOCS\\NOTE.md");
+        assert_eq!(store.entries.len(), 2);
+        assert!(store.entries.iter().any(|e| e.path == "E:\\Other\\keep.txt"));
+    }
+
+    #[test]
+    fn reconcile_handles_rename() {
+        let mut store = VectorStore::new();
+        store.insert(
+            "D:\\Docs\\old.txt".to_string(),
+            "body".to_string(),
+            vec384(1.0),
+        );
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("D:\\Docs\\new.txt", "body", 1.0)],
+            )
+            .expect("reconcile");
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].path, "D:\\Docs\\new.txt");
+    }
+
+    #[test]
+    fn reconcile_removes_deleted_file() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\a.txt".to_string(), "a".to_string(), vec384(1.0));
+        store.insert("D:\\Docs\\b.txt".to_string(), "b".to_string(), vec384(2.0));
+        store
+            .reconcile(&root("D:\\Docs"), vec![staged("D:\\Docs\\a.txt", "a", 1.0)])
+            .expect("reconcile");
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].path, "D:\\Docs\\a.txt");
+    }
+
+    #[test]
+    fn reconcile_leaves_unrelated_roots_untouched() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\a.txt".to_string(), "a".to_string(), vec384(1.0));
+        store.insert(
+            "E:\\Other\\b.txt".to_string(),
+            "b".to_string(),
+            vec384(2.0),
+        );
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("D:\\Docs\\a.txt", "a2", 3.0)],
+            )
+            .expect("reconcile");
+        assert_eq!(store.entries.len(), 2);
+        let other = store
+            .entries
+            .iter()
+            .find(|e| e.path == "E:\\Other\\b.txt")
+            .expect("other retained");
+        assert_eq!(other.content, "b");
+        assert_eq!(other.vector, vec384(2.0));
+    }
+
+    #[test]
+    fn reconcile_same_root_is_idempotent() {
+        let mut store = VectorStore::new();
+        let docs = || {
+            vec![
+                staged("D:\\Docs\\a.txt", "a", 1.0),
+                staged("D:\\Docs\\sub\\b.txt", "b", 2.0),
+            ]
+        };
+        store.reconcile(&root("D:\\Docs"), docs()).expect("first");
+        let snapshot = store.serialize().expect("serialize");
+        store.reconcile(&root("D:\\Docs"), docs()).expect("second");
+        assert_eq!(store.entries.len(), 2);
+        assert_eq!(store.serialize().expect("reserialize"), snapshot);
+    }
+
+    #[test]
+    fn ambiguous_staged_aborts_without_mutation() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\a.txt".to_string(), "a".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let result = store.reconcile(
+            &root("D:\\Docs"),
+            vec![
+                staged("D:\\Docs\\a.txt", "a", 1.0),
+                staged("rel\\b.txt", "b", 2.0),
+            ],
+        );
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+        assert_eq!(store.entries.len(), 1);
+    }
+
+    #[test]
+    fn ambiguous_root_aborts_without_mutation() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\a.txt".to_string(), "a".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let result = store.reconcile(
+            &root("rel\\Docs"),
+            vec![staged("D:\\Docs\\a.txt", "a", 1.0)],
+        );
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+    }
+
+    #[test]
+    fn case_and_separator_variants_produce_one_entry() {
+        let mut store = VectorStore::new();
+        store.insert(
+            "D:\\Docs\\Note.md".to_string(),
+            "v1".to_string(),
+            vec384(1.0),
+        );
+        store.insert(
+            "d:/docs/note.md".to_string(),
+            "v2".to_string(),
+            vec384(2.0),
+        );
+        store.insert(
+            "D:\\DOCS\\NOTE.MD".to_string(),
+            "v3".to_string(),
+            vec384(3.0),
+        );
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].content, "v3");
+        store
+            .reconcile(&root("D:\\Docs"), vec![staged("d:/docs\\NOTE.md", "v4", 4.0)])
+            .expect("reconcile");
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].content, "v4");
+    }
+
+    #[test]
+    fn distinct_absolute_paths_remain_distinct() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\a.txt".to_string(), "a".to_string(), vec384(1.0));
+        store.insert("D:\\Docs\\b.txt".to_string(), "b".to_string(), vec384(1.0));
+        store.insert(
+            "D:\\Docs\\sub\\a.txt".to_string(),
+            "c".to_string(),
+            vec384(1.0),
+        );
+        assert_eq!(store.entries.len(), 3);
+    }
+
+    #[test]
+    fn directory_boundary_checks() {
+        let docs_root = path_key("D:\\Docs").expect("root key");
+        for outside in [
+            "D:\\Docs-old\\a.txt",
+            "D:\\Docs2\\a.txt",
+            "D:\\DocsOld",
+            "E:\\Docs\\a.txt",
+        ] {
+            let key = path_key(outside).expect("outside key");
+            assert!(!is_in_root(&key, &docs_root), "{outside} must be outside");
+        }
+        for inside in ["D:\\Docs\\a.txt", "D:\\Docs\\sub\\b.txt"] {
+            let key = path_key(inside).expect("inside key");
+            assert!(is_in_root(&key, &docs_root), "{inside} must be inside");
+        }
+    }
+
+    #[test]
+    fn drive_root_membership() {
+        let drive = path_key("D:\\").expect("drive key");
+        assert_eq!(drive, "d:\\");
+        let inside = path_key("D:\\Docs\\a.txt").expect("inside");
+        assert!(is_in_root(&inside, &drive));
+        let bare_drive = path_key("D:\\").expect("bare");
+        assert!(is_in_root(&bare_drive, &drive));
+    }
+
+    #[test]
+    fn unc_share_root_membership_and_boundaries() {
+        let share = path_key("\\\\server\\share").expect("share key");
+        assert_eq!(share, "\\\\server\\share\\");
+        let with_slash = path_key("\\\\server\\share\\").expect("slash");
+        assert_eq!(share, with_slash);
+        let inside = path_key("\\\\server\\share\\Docs\\a.txt").expect("inside");
+        assert!(is_in_root(&inside, &share));
+        let docs_root = path_key("\\\\server\\share\\Docs").expect("docs");
+        assert!(is_in_root(&inside, &docs_root));
+        for outside in [
+            "\\\\server\\share-other\\a.txt",
+            "\\\\server\\other\\a.txt",
+            "\\\\other\\share\\a.txt",
+        ] {
+            let key = path_key(outside).expect("outside");
+            assert!(!is_in_root(&key, &share), "{outside} must be outside share");
+        }
+        let docs_old = path_key("\\\\server\\share\\Docs-old\\a.txt").expect("old");
+        assert!(!is_in_root(&docs_old, &docs_root));
+    }
+
+    #[test]
+    fn root_equality_is_inside() {
+        assert!(is_in_root(
+            &path_key("D:\\Docs").expect("a"),
+            &path_key("D:\\Docs").expect("b")
+        ));
+        assert!(is_in_root(
+            &path_key("D:\\").expect("a"),
+            &path_key("D:\\").expect("b")
+        ));
+        assert!(is_in_root(
+            &path_key("\\\\server\\share\\").expect("a"),
+            &path_key("\\\\server\\share").expect("b")
+        ));
+    }
+
+    #[test]
+    fn extended_drive_and_unc_normalization() {
+        assert_eq!(
+            path_key("\\\\?\\C:\\Docs\\File.txt").expect("ext drive"),
+            path_key("C:\\Docs\\File.txt").expect("plain drive")
+        );
+        assert_eq!(
+            path_key("\\\\?\\C:\\Docs\\File.txt").expect("ext"),
+            "c:\\docs\\file.txt"
+        );
+        assert_eq!(
+            path_key("\\\\?\\UNC\\server\\share\\Docs\\File.txt").expect("ext unc"),
+            path_key("\\\\server\\share\\Docs\\File.txt").expect("plain unc")
+        );
+        assert_eq!(
+            path_key("\\\\?\\UNC\\server\\share\\Docs\\File.txt").expect("ext unc"),
+            "\\\\server\\share\\docs\\file.txt"
+        );
+        // Forward-slash spellings converge too.
+        assert_eq!(
+            path_key("C:/Docs/File.txt").expect("slash"),
+            "c:\\docs\\file.txt"
+        );
+    }
+
+    #[test]
+    fn device_and_relative_entries_are_ambiguous_and_retained() {
+        for ambiguous in [
+            "\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\x.txt",
+            "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\a.txt",
+            "\\\\.\\C:\\Docs\\a.txt",
+            "\\\\.\\COM1",
+            "docs\\a.txt",
+            "a.txt",
+            "..\\shared\\b.txt",
+            "C:foo.txt",
+            "\\foo\\bar.txt",
+            "",
+        ] {
+            assert!(path_key(ambiguous).is_none(), "{ambiguous} must be ambiguous");
+        }
+        let mut store = VectorStore::new();
+        store.entries.push(Entry {
+            path: "docs\\legacy.txt".to_string(),
+            content: "legacy".to_string(),
+            vector: vec384(9.0),
+        });
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "a".to_string(),
+            vec384(1.0),
+        );
+        store
+            .reconcile(&root("D:\\Docs"), vec![staged("D:\\Docs\\b.txt", "b", 2.0)])
+            .expect("reconcile");
+        // Ambiguous legacy retained even though it is not in the staged set;
+        // the valid in-root entry was correctly replaced.
+        assert!(store.entries.iter().any(|e| e.path == "docs\\legacy.txt"));
+        assert!(!store.entries.iter().any(|e| e.path == "D:\\Docs\\a.txt"));
+        assert!(store.entries.iter().any(|e| e.path == "D:\\Docs\\b.txt"));
+        // An ambiguous staged path must abort instead of partially applying.
+        let before = store.entries.len();
+        assert!(store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("C:foo.txt", "x", 1.0)]
+            )
+            .is_err());
+        assert_eq!(store.entries.len(), before);
+    }
+
+    #[test]
+    fn root_spelling_variants_converge() {
+        let base = path_key("D:\\Docs").expect("base");
+        for variant in [
+            "D:\\Docs",
+            "D:\\Docs\\",
+            "D:/Docs",
+            "D:/Docs/",
+            "d:\\docs",
+            "D:\\Docs\\.",
+            "D:\\Docs\\sub\\..",
+            "\"D:\\Docs\"",
+        ] {
+            assert_eq!(path_key(variant).expect(variant), base, "{variant}");
+        }
+        assert_eq!(path_key("\\\\server\\share").expect("unc"), "\\\\server\\share\\");
+        assert_eq!(
+            path_key("\\\\server\\share\\").expect("unc slash"),
+            "\\\\server\\share\\"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_reconciles_serialize_newest_wins() {
+        use std::sync::{Arc, Mutex as StdMutex};
+        let store = Arc::new(StdMutex::new(VectorStore::new()));
+        let op = Arc::new(tokio::sync::Mutex::new(()));
+        store.lock().unwrap().insert(
+            "D:\\Docs\\old.txt".to_string(),
+            "old".to_string(),
+            vec384(1.0),
+        );
+        let acquired = Arc::new(tokio::sync::Notify::new());
+        let acquired_clone = acquired.clone();
+        let store_a = store.clone();
+        let op_a = op.clone();
+        let stale = tokio::spawn(async move {
+            let _guard = op_a.lock().await;
+            acquired_clone.notify_one();
+            // Simulate a slow stale scan+embed while holding the op lock.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let mut guard = store_a.lock().unwrap();
+            guard
+                .reconcile(&root("D:\\Docs"), vec![staged("D:\\Docs\\old.txt", "old", 1.0)])
+                .expect("stale reconcile");
+        });
+        acquired.notified().await;
+        let store_b = store.clone();
+        let op_b = op.clone();
+        let fresh = tokio::spawn(async move {
+            let _guard = op_b.lock().await;
+            let mut guard = store_b.lock().unwrap();
+            guard
+                .reconcile(
+                    &root("D:\\Docs"),
+                    vec![staged("D:\\Docs\\new.txt", "new", 2.0)],
+                )
+                .expect("fresh reconcile");
+        });
+        stale.await.expect("stale task");
+        fresh.await.expect("fresh task");
+        let guard = store.lock().unwrap();
+        assert_eq!(guard.entries.len(), 1);
+        assert_eq!(guard.entries[0].path, "D:\\Docs\\new.txt");
+        assert_eq!(guard.entries[0].content, "new");
     }
 
     fn outcome_name(outcome: &LoadOutcome) -> &'static str {
