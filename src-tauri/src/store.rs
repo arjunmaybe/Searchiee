@@ -1726,6 +1726,111 @@ mod tests {
         assert_eq!(loaded.entry_count(), 2);
     }
 
+    #[test]
+    fn v2_registry_sanitizes_invalid_entries_without_losing_documents() {
+        let dir = test_dir("v2sanitize");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let v2 = serde_json::json!({
+            "version": 2,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [
+                { "path": "D:\\Docs\\a.txt", "content": "a", "vector": vec384(1.0) },
+                { "path": "E:\\Other\\b.txt", "content": "b", "vector": vec384(2.0) }
+            ],
+            "folders": ["D:\\Docs", "d:/docs\\", "rel\\Docs", "", "E:\\Other"]
+        });
+        std::fs::write(&dest, serde_json::to_string(&v2).unwrap()).expect("seed v2");
+        // Must load normally: invalid registry paths must not quarantine
+        // the whole index.
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 2);
+        let folders = loaded.list_folders();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].path, "D:\\Docs");
+        assert_eq!(folders[0].file_count, 1);
+        assert_eq!(folders[1].path, "E:\\Other");
+        assert_eq!(folders[1].file_count, 1);
+        assert!(dest.exists());
+        assert!(corrupt_files_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn v1_index_upgrades_to_v2_on_next_save() {
+        let dir = test_dir("v1upgrade");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let v1 = serde_json::json!({
+            "version": 1,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [{ "path": "D:\\Docs\\a.txt", "content": "x", "vector": vec384(1.0) }]
+        });
+        std::fs::write(&dest, serde_json::to_string(&v1).unwrap()).expect("seed v1");
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert!(loaded.list_folders().is_empty());
+        loaded.save_to_path(&dest).expect("save");
+        let raw = std::fs::read_to_string(&dest).expect("read back");
+        let saved: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+        assert_eq!(saved["version"], serde_json::Value::from(2));
+        assert_eq!(saved["entries"].as_array().expect("entries").len(), 1);
+        assert_eq!(
+            saved["entries"][0]["path"],
+            serde_json::Value::from("D:\\Docs\\a.txt")
+        );
+        let folders = saved["folders"].as_array().expect("folders field exists");
+        assert!(folders.is_empty());
+    }
+
+    #[test]
+    fn unregistered_legacy_root_removal_is_index_only() {
+        let base = test_dir("legacy-remove");
+        let dir_a = base.join("folderA");
+        let dir_b = base.join("folderB");
+        std::fs::create_dir_all(&dir_a).expect("dirA");
+        std::fs::create_dir_all(&dir_b).expect("dirB");
+        let file_a1 = dir_a.join("one.txt");
+        let file_a2 = dir_a.join("two.txt");
+        let file_b = dir_b.join("keep.txt");
+        std::fs::write(&file_a1, "one").expect("fileA1");
+        std::fs::write(&file_a2, "two").expect("fileA2");
+        std::fs::write(&file_b, "keep").expect("fileB");
+        // Genuine v1 index: entries under two roots, no registry.
+        let dest = base.join(INDEX_FILE_NAME);
+        let v1 = serde_json::json!({
+            "version": 1,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [
+                { "path": file_a1.to_string_lossy(), "content": "one", "vector": vec384(1.0) },
+                { "path": file_a2.to_string_lossy(), "content": "two", "vector": vec384(2.0) },
+                { "path": file_b.to_string_lossy(), "content": "keep", "vector": vec384(3.0) }
+            ]
+        });
+        std::fs::write(&dest, serde_json::to_string(&v1).unwrap()).expect("seed v1");
+        let mut loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 3);
+        assert!(loaded.list_folders().is_empty());
+        let removed = loaded.remove_folder(&dir_a).expect("remove");
+        assert_eq!(removed, 2);
+        assert_eq!(loaded.entry_count(), 1);
+        // No registration is created as a side effect of removal.
+        assert!(loaded.list_folders().is_empty());
+        // Removal is index-only: every source file still exists.
+        assert!(file_a1.exists());
+        assert!(file_a2.exists());
+        assert!(file_b.exists());
+    }
+
     fn outcome_name(outcome: &LoadOutcome) -> &'static str {
         match outcome {
             LoadOutcome::Empty => "Empty",
