@@ -46,11 +46,21 @@
         color: #eee;
         cursor: pointer;
       }
+      #notice {
+        margin-top: 12px;
+        padding: 8px 12px;
+        font-size: 13px;
+        border-radius: 6px;
+        border: 1px solid #444;
+        background: #1a1a1a;
+        color: #eee;
+      }
     </style>
   </head>
   <body>
     <input id="query" type="text" placeholder="Search your indexed files..." />
     <button id="index-btn">Index a folder</button>
+    <div id="notice" hidden></div>
     <div id="results"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

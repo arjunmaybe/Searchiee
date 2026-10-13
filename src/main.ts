@@ -9,6 +9,7 @@ interface SearchResult {
 const queryInput = document.querySelector<HTMLInputElement>("#query")!;
 const resultsEl = document.querySelector<HTMLDivElement>("#results")!;
 const indexBtn = document.querySelector<HTMLButtonElement>("#index-btn")!;
+const noticeEl = document.querySelector<HTMLDivElement>("#notice")!;
 
 let debounceTimer: ReturnType<typeof setTimeout>;
 
@@ -24,9 +25,14 @@ indexBtn.addEventListener("click", async () => {
   if (!folder) return;
 
   indexBtn.textContent = "Indexing...";
-  const count = await invoke<number>("index_folder", { path: folder });
-  indexBtn.textContent = "Index a folder";
-  alert(`Indexed ${count} files`);
+  try {
+    const count = await invoke<number>("index_folder", { path: folder });
+    alert(`Indexed ${count} files`);
+  } catch (e) {
+    alert(`Indexing failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    indexBtn.textContent = "Index a folder";
+  }
 });
 
 async function runSearch() {
@@ -58,3 +64,18 @@ function escapeHtml(s: string): string {
   div.textContent = s;
   return div.innerHTML;
 }
+
+void (async () => {
+  try {
+    const notice = await invoke<string | null>("get_startup_notice");
+    if (notice) {
+      noticeEl.hidden = false;
+      noticeEl.textContent = notice;
+      noticeEl.addEventListener("click", () => {
+        noticeEl.hidden = true;
+      });
+    }
+  } catch {
+    // Stay quiet; search remains usable without the notice.
+  }
+})();

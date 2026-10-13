@@ -53,3 +53,7 @@ cargo tauri dev
 2. Point the watcher at a real folder and confirm indexing works end to end
 3. Add chunking for longer documents before embedding them
 4. Add a lexical/keyword pass alongside the vector search (hybrid search)
+
+## Local persistence and privacy
+
+The persistent index stores local file paths, document contents, and embeddings in the app-specific Local AppData directory (`index-v1.json`). Searchiee does not intentionally upload or sync this index. Deleting `index-v1.json` resets the saved index and requires re-indexing; it does not delete the original documents.
