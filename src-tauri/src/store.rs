@@ -22,6 +22,13 @@ pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const INDEX_MODEL_ID: &str = "all-MiniLM-L6-v2";
 /// Embedding dimension emitted by `AllMiniLML6V2`.
 pub const INDEX_DIM: usize = 384;
+/// Experimental minimum cosine similarity for a search match to be
+/// returned. Chosen from a tiny exploratory sample (3 relevant queries
+/// scoring 46–75%, 3 unrelated queries scoring 2–17%): 25% keeps the
+/// relevant sample while dropping the unrelated sample. These are raw
+/// similarity scores, not probabilities, and six queries prove nothing
+/// general — treat this as a starting point to tune with real usage.
+pub const MIN_RELEVANCE_SCORE: f32 = 0.25;
 pub const INDEX_FILE_NAME: &str = "index-v1.json";
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -432,6 +439,10 @@ impl VectorStore {
                 snippet: snippet(&e.content),
                 score: cosine_similarity(query_vector, &e.vector),
             })
+            // Drop weak matches before the limit so they never consume
+            // result slots. Non-finite scores are excluded too, which also
+            // keeps the `partial_cmp` sort below from ever seeing NaN.
+            .filter(|r| r.score.is_finite() && r.score >= MIN_RELEVANCE_SCORE)
             .collect();
 
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
@@ -897,8 +908,13 @@ mod tests {
         let dest = dir.join(INDEX_FILE_NAME);
         let mut store = VectorStore::new();
         store.insert("a.txt".to_string(), "astronomy stars".to_string(), vec384(1.0));
-        let mut other = vec384(0.0);
-        other[0] = 1.0;
+        // Similar enough to the all-ones query to clear the relevance
+        // threshold (cosine ≈ 0.71), unlike the previous near-orthogonal
+        // vector which the threshold now excludes.
+        let mut other = vec384(1.0);
+        for v in other.iter_mut().skip(INDEX_DIM / 2) {
+            *v = 0.0;
+        }
         store.insert("b.txt".to_string(), "gardening soil".to_string(), other);
 
         store.save_to_path(&dest).expect("save");
@@ -2082,6 +2098,85 @@ mod tests {
             .filter(|p| p.to_string_lossy().contains(".tmp."))
             .collect();
         assert!(strays.is_empty());
+    }
+
+    #[test]
+    fn search_returns_matches_above_threshold() {
+        let mut store = VectorStore::new();
+        store.insert("a.txt".to_string(), "kept".to_string(), vec![1.0, 1.0]);
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "a.txt");
+        assert!(results[0].score >= MIN_RELEVANCE_SCORE);
+    }
+
+    #[test]
+    fn search_excludes_below_threshold_and_negative_matches() {
+        let mut store = VectorStore::new();
+        store.insert("weak.txt".to_string(), "weak".to_string(), vec![0.2, 0.98]);
+        store.insert("neg.txt".to_string(), "neg".to_string(), vec![-1.0, 0.0]);
+        store.insert("kept.txt".to_string(), "kept".to_string(), vec![1.0, 0.0]);
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "kept.txt");
+    }
+
+    #[test]
+    fn search_results_remain_sorted_by_score() {
+        let mut store = VectorStore::new();
+        store.insert("mid.txt".to_string(), "mid".to_string(), vec![1.0, 1.0]);
+        store.insert("top.txt".to_string(), "top".to_string(), vec![1.0, 0.0]);
+        store.insert("low.txt".to_string(), "low".to_string(), vec![0.3, 0.95]);
+        let results = store.search(&[1.0, 0.0], 10);
+        let paths: Vec<_> = results.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, vec!["top.txt", "mid.txt", "low.txt"]);
+        assert!(results[0].score >= results[1].score);
+        assert!(results[1].score >= results[2].score);
+    }
+
+    #[test]
+    fn search_filters_before_applying_limit() {
+        let mut store = VectorStore::new();
+        store.insert("weak1.txt".to_string(), "w".to_string(), vec![0.0, 1.0]);
+        store.insert("weak2.txt".to_string(), "w".to_string(), vec![0.0, 1.0]);
+        store.insert("a.txt".to_string(), "a".to_string(), vec![1.0, 0.2]);
+        store.insert("b.txt".to_string(), "b".to_string(), vec![1.0, 0.5]);
+        store.insert("c.txt".to_string(), "c".to_string(), vec![1.0, 1.0]);
+        // Three qualifying matches and limit 2: the weak entries must not
+        // consume slots, so both slots hold qualifying matches.
+        let results = store.search(&[1.0, 0.0], 2);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.score >= MIN_RELEVANCE_SCORE));
+        assert_eq!(results[0].path, "a.txt");
+        assert_eq!(results[1].path, "b.txt");
+    }
+
+    #[test]
+    fn search_excludes_non_finite_scores_without_panicking() {
+        let mut store = VectorStore::new();
+        store.entries.push(Entry {
+            path: "nan.txt".to_string(),
+            content: "nan".to_string(),
+            vector: vec![f32::NAN, 0.0],
+        });
+        store.entries.push(Entry {
+            path: "inf.txt".to_string(),
+            content: "inf".to_string(),
+            vector: vec![f32::INFINITY, 0.0],
+        });
+        store.insert("ok.txt".to_string(), "ok".to_string(), vec![1.0, 0.0]);
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "ok.txt");
+    }
+
+    #[test]
+    fn search_empty_store_or_no_qualifying_results_returns_empty() {
+        let empty = VectorStore::new();
+        assert!(empty.search(&[1.0, 0.0], 10).is_empty());
+        let mut store = VectorStore::new();
+        store.insert("weak.txt".to_string(), "weak".to_string(), vec![0.0, 1.0]);
+        assert!(store.search(&[1.0, 0.0], 10).is_empty());
     }
 
     fn outcome_name(outcome: &LoadOutcome) -> &'static str {

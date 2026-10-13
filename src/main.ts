@@ -119,6 +119,10 @@ async function runSearch() {
 }
 
 function render(results: SearchResult[]) {
+  if (results.length === 0) {
+    resultsEl.innerHTML = `<div class="no-results">No sufficiently relevant results</div>`;
+    return;
+  }
   resultsEl.innerHTML = results
     .map(
       (r) => `
