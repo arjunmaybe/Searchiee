@@ -9,9 +9,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-const THRESHOLDS: [f32; 9] = [
-    0.00, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50,
-];
+const THRESHOLDS: [f32; 9] = [0.00, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50];
 const BASELINE_THRESHOLD: f32 = 0.25;
 const RESULT_LIMIT: usize = 10;
 
@@ -91,11 +89,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let mut document_vectors = Vec::with_capacity(corpus.documents.len());
 
     for (index, document) in corpus.documents.iter().enumerate() {
-        print!(
-            "\rDocuments: {}/{}",
-            index + 1,
-            corpus.documents.len()
-        );
+        print!("\rDocuments: {}/{}", index + 1, corpus.documents.len());
         io::stdout().flush()?;
 
         let vector = embed::embed_text(&document.content).await?;
@@ -105,22 +99,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
             &mut dimension,
         )?;
 
-        document_vectors.push((
-            document.id.clone(),
-            document.title.clone(),
-            vector,
-        ));
+        document_vectors.push((document.id.clone(), document.title.clone(), vector));
     }
     println!();
 
     let mut evaluated = Vec::with_capacity(corpus.queries.len());
 
     for (index, query) in corpus.queries.iter().enumerate() {
-        print!(
-            "\rQueries: {}/{}",
-            index + 1,
-            corpus.queries.len()
-        );
+        print!("\rQueries: {}/{}", index + 1, corpus.queries.len());
         io::stdout().flush()?;
 
         let query_vector = embed::embed_text(&query.text).await?;
@@ -143,11 +129,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
         // Match production's descending score order, with a stable
         // ID tie-breaker so evaluation output is reproducible.
-        results.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        results.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
 
         evaluated.push(EvaluatedQuery {
             id: query.id.clone(),
@@ -175,24 +157,20 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
         let target_hits = format!(
             "{}/{}",
-            metrics.positive_queries_hit,
-            metrics.positive_queries
+            metrics.positive_queries_hit, metrics.positive_queries
         );
         let negative_hits = format!(
             "{}/{}",
-            metrics.negative_queries_hit,
-            metrics.negative_queries
+            metrics.negative_queries_hit, metrics.negative_queries
         );
 
         let precision = if metrics.total_results == 0 {
             0.0
         } else {
-            100.0 * metrics.true_positive_docs as f64
-                / metrics.total_results as f64
+            100.0 * metrics.true_positive_docs as f64 / metrics.total_results as f64
         };
 
-        let average_results =
-            metrics.total_results as f64 / evaluated.len() as f64;
+        let average_results = metrics.total_results as f64 / evaluated.len() as f64;
 
         println!(
             "{:>9.2} {:>12} {:>13} {:>13} {:>12} {:>10.1}% {:>11.2}",
@@ -276,9 +254,7 @@ fn validate_corpus(corpus: &Corpus) -> Result<(), String> {
     let negatives = corpus.queries.len() - positives;
 
     if positives == 0 || negatives == 0 {
-        return Err(
-            "the corpus needs both positive queries and negative controls".into()
-        );
+        return Err("the corpus needs both positive queries and negative controls".into());
     }
 
     Ok(())
@@ -297,15 +273,13 @@ fn validate_embedding(
     }
 
     match *expected_dimension {
-        Some(expected) if vector.len() != expected => {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "{label} has {} dimensions; expected {expected}",
-                    vector.len()
-                ),
-            ))
-        }
+        Some(expected) if vector.len() != expected => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} has {} dimensions; expected {expected}",
+                vector.len()
+            ),
+        )),
         Some(_) => Ok(()),
         None => {
             *expected_dimension = Some(vector.len());
@@ -327,10 +301,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a * norm_b)
 }
 
-fn results_at(
-    query: &EvaluatedQuery,
-    threshold: f32,
-) -> Vec<&ScoredDocument> {
+fn results_at(query: &EvaluatedQuery, threshold: f32) -> Vec<&ScoredDocument> {
     query
         .results
         .iter()
@@ -377,9 +348,7 @@ fn evaluate_at(queries: &[EvaluatedQuery], threshold: f32) -> Metrics {
 }
 
 fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
-    println!(
-        "\nPer-query details at the current threshold ({threshold:.2})"
-    );
+    println!("\nPer-query details at the current threshold ({threshold:.2})");
 
     for query in queries {
         let returned = results_at(query, threshold);
@@ -413,19 +382,16 @@ fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
         let top_results = returned
             .iter()
             .take(3)
-            .map(|result| format!(
-                "{} ({:.1}%)",
-                result.title,
-                result.score * 100.0
-            ))
+            .map(|result| format!("{} ({:.1}%)", result.title, result.score * 100.0))
             .collect::<Vec<_>>()
             .join("; ");
 
         let label = if query.relevant_document_ids.is_empty() {
             "negative"
-        } else if returned.iter().any(|result| {
-            query.relevant_document_ids.contains(&result.id)
-        }) {
+        } else if returned
+            .iter()
+            .any(|result| query.relevant_document_ids.contains(&result.id))
+        {
             "target-hit"
         } else {
             "target-missed"
@@ -443,6 +409,205 @@ fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
             } else {
                 &top_results
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn document(id: &str) -> Document {
+        Document {
+            id: id.to_string(),
+            title: format!("{id} title"),
+            content: format!("{id} content"),
+        }
+    }
+
+    fn query(id: &str, relevant: &[&str]) -> Query {
+        Query {
+            id: id.to_string(),
+            text: format!("{id} text"),
+            relevant_document_ids: relevant.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn valid_corpus() -> Corpus {
+        Corpus {
+            documents: vec![document("d1"), document("d2")],
+            queries: vec![query("q1", &["d1"]), query("q2", &[])],
+        }
+    }
+
+    fn scored(id: &str, score: f32) -> ScoredDocument {
+        ScoredDocument {
+            id: id.to_string(),
+            title: format!("{id} title"),
+            score,
+        }
+    }
+
+    fn evaluated_query(id: &str, relevant: &[&str], scores: &[(&str, f32)]) -> EvaluatedQuery {
+        EvaluatedQuery {
+            id: id.to_string(),
+            text: format!("{id} text"),
+            relevant_document_ids: relevant.iter().map(|s| s.to_string()).collect(),
+            results: scores
+                .iter()
+                .map(|(rid, score)| scored(rid, *score))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn valid_corpus_passes_validation() {
+        assert!(validate_corpus(&valid_corpus()).is_ok());
+    }
+
+    #[test]
+    fn duplicate_document_ids_are_rejected() {
+        let mut corpus = valid_corpus();
+        corpus.documents.push(document("d1"));
+        let error = validate_corpus(&corpus).expect_err("duplicate doc ID");
+        assert!(error.contains("duplicate document ID"));
+    }
+
+    #[test]
+    fn duplicate_query_ids_are_rejected() {
+        let mut corpus = valid_corpus();
+        corpus.queries.push(query("q1", &[]));
+        let error = validate_corpus(&corpus).expect_err("duplicate query ID");
+        assert!(error.contains("duplicate query ID"));
+    }
+
+    #[test]
+    fn unknown_target_ids_are_rejected() {
+        let mut corpus = valid_corpus();
+        corpus.queries[0].relevant_document_ids = vec!["missing".to_string()];
+        let error = validate_corpus(&corpus).expect_err("unknown target");
+        assert!(error.contains("unknown document"));
+    }
+
+    #[test]
+    fn duplicate_target_ids_are_rejected() {
+        let mut corpus = valid_corpus();
+        corpus.queries[0].relevant_document_ids = vec!["d1".to_string(), "d1".to_string()];
+        let error = validate_corpus(&corpus).expect_err("duplicate target");
+        assert!(error.contains("repeats relevant document"));
+    }
+
+    #[test]
+    fn corpus_needs_both_positive_and_negative_queries() {
+        let mut no_positive = valid_corpus();
+        no_positive.queries[0].relevant_document_ids.clear();
+        assert!(validate_corpus(&no_positive).is_err());
+
+        let mut no_negative = valid_corpus();
+        no_negative.queries[1].relevant_document_ids = vec!["d2".to_string()];
+        assert!(validate_corpus(&no_negative).is_err());
+
+        let empty = Corpus {
+            documents: vec![],
+            queries: vec![],
+        };
+        assert!(validate_corpus(&empty).is_err());
+    }
+
+    #[test]
+    fn embeddings_must_be_non_empty_and_finite() {
+        let mut dimension = None;
+        assert!(validate_embedding(&[0.1, 0.2, 0.3], "first", &mut dimension).is_ok());
+        assert_eq!(dimension, Some(3));
+
+        assert!(validate_embedding(&[], "empty", &mut dimension).is_err());
+        assert!(validate_embedding(&[f32::NAN, 0.0, 0.0], "nan", &mut dimension).is_err());
+        assert!(validate_embedding(&[f32::INFINITY, 0.0, 0.0], "inf", &mut dimension).is_err());
+        // Failed validations must not clobber the tracked dimension.
+        assert_eq!(dimension, Some(3));
+    }
+
+    #[test]
+    fn embeddings_must_have_consistent_dimensions() {
+        let mut dimension = None;
+        assert!(validate_embedding(&[1.0, 2.0], "first", &mut dimension).is_ok());
+        assert!(validate_embedding(&[3.0, 4.0], "same", &mut dimension).is_ok());
+        let error = validate_embedding(&[1.0, 2.0, 3.0], "wide", &mut dimension)
+            .expect_err("mismatched dimensions");
+        assert!(error.to_string().contains("dimensions"));
+    }
+
+    #[test]
+    fn cosine_similarity_reference_cases() {
+        assert!((cosine_similarity(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]) - 1.0).abs() < 1e-6);
+        assert!((cosine_similarity(&[1.0, 0.0], &[0.0, 1.0])).abs() < 1e-6);
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 2.0]), 0.0);
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn results_at_keeps_threshold_and_applies_limit() {
+        let query = evaluated_query(
+            "q",
+            &["keep"],
+            &[
+                ("keep", 0.90),
+                ("boundary", 0.25),
+                ("weak", 0.24),
+                ("bad", f32::NAN),
+            ],
+        );
+        let ids: Vec<_> = results_at(&query, 0.25)
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["keep", "boundary"]);
+    }
+
+    #[test]
+    fn results_at_respects_the_ten_result_limit() {
+        let scores: Vec<(String, f32)> = (0..12)
+            .map(|i| (format!("d{i:02}"), 0.99 - i as f32 * 0.01))
+            .collect();
+        let query = EvaluatedQuery {
+            id: "q".to_string(),
+            text: "q text".to_string(),
+            relevant_document_ids: vec![],
+            results: scores
+                .iter()
+                .map(|(id, score)| scored(id, *score))
+                .collect(),
+        };
+        let returned = results_at(&query, 0.25);
+        assert_eq!(returned.len(), 10);
+        assert_eq!(returned[0].id, "d00");
+        assert_eq!(returned[9].id, "d09");
+    }
+
+    #[test]
+    fn evaluate_at_counts_hits_and_false_positives() {
+        let queries = vec![
+            evaluated_query("hit", &["target"], &[("target", 0.8), ("other", 0.6)]),
+            evaluated_query("miss", &["absent"], &[("other", 0.6)]),
+            evaluated_query("neg-hit", &[], &[("noise", 0.5)]),
+            evaluated_query("neg-clean", &[], &[("quiet", 0.1)]),
+        ];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.positive_queries, 2);
+        assert_eq!(metrics.positive_queries_hit, 1);
+        assert_eq!(metrics.true_positive_docs, 1);
+        // "other" beside the hit plus the lone miss result.
+        assert_eq!(metrics.positive_false_positive_docs, 2);
+
+        assert_eq!(metrics.negative_queries, 2);
+        assert_eq!(metrics.negative_queries_hit, 1);
+        assert_eq!(metrics.negative_false_positive_docs, 1);
+
+        assert_eq!(metrics.total_results, 4);
+        assert_eq!(
+            metrics.positive_false_positive_docs + metrics.negative_false_positive_docs,
+            3
         );
     }
 }
