@@ -126,9 +126,10 @@ cargo check --manifest-path .\src-tauri\Cargo.toml
 npm run build
 ```
 
-The Rust suite (50 tests) covers path identity and root boundaries,
+The Rust suite (67 tests) covers path identity and root boundaries,
 fail-closed scanning, staged reconciliation, folder registration and
-root-scoped removal, schema-v1/v2 migration, and atomic persistence.
+root-scoped removal, schema-v1/v2 migration, atomic persistence, and
+search-relevance threshold filtering.
 
 ## Project layout
 
@@ -145,3 +146,4 @@ root-scoped removal, schema-v1/v2 migration, and atomic persistence.
 - Only `.md` and `.txt` files are indexed.
 - One embedding per whole file; very long documents are not chunked.
 - No background watching: changed files appear only after a manual refresh.
+- The minimum cosine-similarity threshold of `0.25` is experimental, not calibrated against a broad labelled evaluation set, and can still admit irrelevant results scoring above the threshold.
