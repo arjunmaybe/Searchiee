@@ -2111,6 +2111,25 @@ mod tests {
     }
 
     #[test]
+    fn search_keeps_matches_at_threshold() {
+        let mut store = VectorStore::new();
+
+        // The query's dot product is 1 and the stored vector's norm is 4,
+        // so cosine similarity is exactly 0.25.
+        store.insert(
+            "boundary.txt".to_string(),
+            "boundary".to_string(),
+            vec![1.0, 3.0, 2.0, 1.0, 1.0],
+        );
+
+        let results = store.search(&[1.0, 0.0, 0.0, 0.0, 0.0], 10);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "boundary.txt");
+        assert_eq!(results[0].score, MIN_RELEVANCE_SCORE);
+    }
+
+    #[test]
     fn search_excludes_below_threshold_and_negative_matches() {
         let mut store = VectorStore::new();
         store.insert("weak.txt".to_string(), "weak".to_string(), vec![0.2, 0.98]);
