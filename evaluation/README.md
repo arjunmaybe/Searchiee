@@ -39,6 +39,31 @@ These figures are diagnostic, not a production-quality claim. The same corpus wa
 
 At 0.45, all 16 intended targets were retained and none of the 12 negative controls returned results, but one non-target result remained on a positive query. At 0.50, the TLS-certificate target was missed. Do not change the production threshold solely on these observations.
 
+## Held-out validation corpus
+
+`validation-corpus.json` is a separate synthetic diagnostic dataset covering topics absent from the exploratory corpus (backyard beekeeping, bicycle repair, pottery, knitting, home coffee brewing, aquarium fishkeeping, amateur astronomy, and chess improvement):
+
+- 24 documents across 8 topic clusters, 3 related but distinguishable documents per cluster.
+- 36 queries: 24 positive queries and 12 negative controls.
+- 6 clearly out-of-corpus negatives (scuba diving, tax deductions, ballet, lighthouse keepers, Tokyo subway navigation, wedding planning).
+- 6 difficult near-miss negatives whose answers are not covered by any document (bee-sting treatment, bike-frame welding, porcelain clay formulation, coffee roasting, clownfish breeding, solar-eclipse predictions).
+- Positive queries use varied wording and specificity; 5 carry multiple relevance labels.
+
+Like the exploratory corpus, this is a synthetic diagnostic dataset, not an independently validated real-world benchmark.
+
+## Validation baseline at the production threshold (0.25)
+
+Observed by running the unchanged evaluator against the held-out corpus:
+
+- 24/24 positive queries returned at least one labelled relevant document.
+- 29/31 individual relevance labels were retrieved; the broad bicycle-maintenance query missed two labelled targets (8.6% and 0.6%).
+- 22/24 positive queries had a labelled relevant document at rank 1; the beekeeping mite-monitoring and aquarium-water-testing targets ranked second.
+- 37 non-target results were returned across positive queries.
+- 6/12 negative queries returned results: 1/6 clearly out-of-corpus queries (ballet) and 5/6 difficult near-misses (only frame welding returned nothing).
+- The evaluator reported 12 results on negative queries in total.
+
+The 24/24 query-hit rate does not mean every relevant document was retrieved (2 of 31 labels were missed), nor that the top-ranked result was always relevant (2 queries ranked a labelled target second). Separately, 37 non-target results were returned across positive queries. No threshold was selected or changed on the basis of these results; the exploratory sweep above stays separate from this baseline.
+
 ## Limitations
 
-This is a small synthetic diagnostic dataset, not an independently validated benchmark. The corpus uses simplified single-target labels, and the same data was used to compare thresholds. These results do not establish general retrieval quality. The 0.45 result is a candidate for further evaluation, not sufficient evidence to change the production threshold.
+The exploratory corpus (`relevance-corpus.json`) is a small synthetic diagnostic dataset, not an independently validated benchmark. It uses simplified single-target labels, and the same data was used to compare thresholds. These results do not establish general retrieval quality. The 0.45 result is a candidate for further evaluation, not sufficient evidence to change the production threshold. The held-out `validation-corpus.json` is likewise synthetic and uses author-assigned labels, so its baseline is diagnostic rather than a general estimate of search quality.
