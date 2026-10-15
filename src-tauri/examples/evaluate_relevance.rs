@@ -187,8 +187,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
     print_baseline_details(&evaluated, BASELINE_THRESHOLD);
 
     println!(
-        "\nEvaluation note: this is a small synthetic corpus with one \
-         labelled target per positive query. Treat the results as \
+        "\nEvaluation note: this is a small synthetic corpus with \
+         author-assigned relevance labels. Treat the results as \
          diagnostic evidence, not a general relevance benchmark."
     );
 

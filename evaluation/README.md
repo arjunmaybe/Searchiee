@@ -21,6 +21,15 @@ $env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
 cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance
 ```
 
+This evaluates the default exploratory corpus
+(`evaluation/relevance-corpus.json`). To evaluate the held-out
+validation corpus instead, pass its path as an argument:
+
+```powershell
+$env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
+cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- evaluation\validation-corpus.json
+```
+
 The first run downloads the local embedding model into the separate cache directory. Later runs reuse it. The evaluator uses Searchiee's existing local embedding function and compares candidate thresholds without changing the production threshold.
 
 ## Exploratory results
