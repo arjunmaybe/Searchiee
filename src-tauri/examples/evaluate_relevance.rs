@@ -53,12 +53,61 @@ struct EvaluatedQuery {
 struct Metrics {
     positive_queries: usize,
     positive_queries_hit: usize,
+    positive_results: usize,
     positive_false_positive_docs: usize,
+    true_positive_docs: usize,
+    total_labels: usize,
+    reciprocal_rank_sum: f64,
     negative_queries: usize,
     negative_queries_hit: usize,
-    negative_false_positive_docs: usize,
-    true_positive_docs: usize,
+    negative_results: usize,
     total_results: usize,
+}
+
+impl Metrics {
+    /// Share of labelled query-document pairs that were returned, as a
+    /// percentage. Each label counts separately, so multi-label queries
+    /// contribute more than once and the denominator never shrinks when a
+    /// label is missed.
+    fn label_recall(&self) -> f64 {
+        if self.total_labels == 0 {
+            0.0
+        } else {
+            100.0 * self.true_positive_docs as f64 / self.total_labels as f64
+        }
+    }
+
+    /// Mean reciprocal rank of the first relevant result across positive
+    /// queries, computed within the returned top-10 list. A positive query
+    /// with no relevant result contributes zero but stays in the denominator.
+    fn mrr_at_10(&self) -> f64 {
+        if self.positive_queries == 0 {
+            0.0
+        } else {
+            self.reciprocal_rank_sum / self.positive_queries as f64
+        }
+    }
+
+    /// Share of returned documents on positive queries that are labelled
+    /// relevant, as a percentage.
+    fn positive_precision(&self) -> f64 {
+        if self.positive_results == 0 {
+            0.0
+        } else {
+            100.0 * self.true_positive_docs as f64 / self.positive_results as f64
+        }
+    }
+
+    /// Share of all returned documents that are labelled relevant, as a
+    /// percentage. Negative controls have no labels, so every document they
+    /// return counts as a false positive.
+    fn overall_precision(&self) -> f64 {
+        if self.total_results == 0 {
+            0.0
+        } else {
+            100.0 * self.true_positive_docs as f64 / self.total_results as f64
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -203,20 +252,23 @@ async fn run() -> Result<(), Box<dyn Error>> {
         println!("\nThreshold comparison (maximum {RESULT_LIMIT} results per query)");
     }
     println!(
-        "{:>9} {:>12} {:>13} {:>13} {:>12} {:>11} {:>11}",
+        "{:>9} {:>9} {:>10} {:>8} {:>8} {:>11} {:>13} {:>9} {:>12} {:>10}",
         "Threshold",
-        "Target hits",
-        "Positive FP",
-        "Negative hit",
-        "Negative FP",
-        "Precision",
+        "Pos hit",
+        "Recall@10",
+        "MRR@10",
+        "Pos FP",
+        "Pos prec",
+        "Overall prec",
+        "Neg hit",
+        "Neg results",
         "Avg/query"
     );
 
     for threshold in thresholds_for(options.baseline_only) {
         let metrics = evaluate_at(&evaluated, threshold);
 
-        let target_hits = format!(
+        let positive_hits = format!(
             "{}/{}",
             metrics.positive_queries_hit, metrics.positive_queries
         );
@@ -225,22 +277,19 @@ async fn run() -> Result<(), Box<dyn Error>> {
             metrics.negative_queries_hit, metrics.negative_queries
         );
 
-        let precision = if metrics.total_results == 0 {
-            0.0
-        } else {
-            100.0 * metrics.true_positive_docs as f64 / metrics.total_results as f64
-        };
-
         let average_results = metrics.total_results as f64 / evaluated.len() as f64;
 
         println!(
-            "{:>9.2} {:>12} {:>13} {:>13} {:>12} {:>10.1}% {:>11.2}",
+            "{:>9.2} {:>9} {:>9.1}% {:>8.3} {:>8} {:>10.1}% {:>12.1}% {:>9} {:>12} {:>10.2}",
             threshold,
-            target_hits,
+            positive_hits,
+            metrics.label_recall(),
+            metrics.mrr_at_10(),
             metrics.positive_false_positive_docs,
+            metrics.positive_precision(),
+            metrics.overall_precision(),
             negative_hits,
-            metrics.negative_false_positive_docs,
-            precision,
+            metrics.negative_results,
             average_results
         );
     }
@@ -397,12 +446,15 @@ fn evaluate_at(queries: &[EvaluatedQuery], threshold: f32) -> Metrics {
                 metrics.negative_queries_hit += 1;
             }
 
-            // Negative controls have no labelled relevant documents.
-            metrics.negative_false_positive_docs += returned.len();
+            // Negative controls have no labelled relevant documents, so every
+            // returned document is a false positive.
+            metrics.negative_results += returned.len();
             continue;
         }
 
         metrics.positive_queries += 1;
+        metrics.total_labels += query.relevant_document_ids.len();
+        metrics.positive_results += returned.len();
 
         let hits = returned
             .iter()
@@ -415,6 +467,14 @@ fn evaluate_at(queries: &[EvaluatedQuery], threshold: f32) -> Metrics {
 
         metrics.true_positive_docs += hits;
         metrics.positive_false_positive_docs += returned.len() - hits;
+
+        // Reciprocal rank of the first relevant result in the returned list.
+        if let Some(position) = returned
+            .iter()
+            .position(|result| query.relevant_document_ids.contains(&result.id))
+        {
+            metrics.reciprocal_rank_sum += 1.0 / (position + 1) as f64;
+        }
     }
 
     metrics
@@ -740,17 +800,242 @@ mod tests {
         assert_eq!(metrics.positive_queries, 2);
         assert_eq!(metrics.positive_queries_hit, 1);
         assert_eq!(metrics.true_positive_docs, 1);
+        assert_eq!(metrics.total_labels, 2);
+        assert_eq!(metrics.positive_results, 3);
         // "other" beside the hit plus the lone miss result.
         assert_eq!(metrics.positive_false_positive_docs, 2);
 
         assert_eq!(metrics.negative_queries, 2);
         assert_eq!(metrics.negative_queries_hit, 1);
-        assert_eq!(metrics.negative_false_positive_docs, 1);
+        assert_eq!(metrics.negative_results, 1);
 
         assert_eq!(metrics.total_results, 4);
         assert_eq!(
-            metrics.positive_false_positive_docs + metrics.negative_false_positive_docs,
+            metrics.positive_false_positive_docs + metrics.negative_results,
             3
         );
+
+        // The hit query's only relevant document is the first result.
+        assert_eq!(metrics.reciprocal_rank_sum, 1.0);
+        assert_eq!(metrics.label_recall(), 50.0);
+        assert_eq!(metrics.mrr_at_10(), 0.5);
+        assert!((metrics.positive_precision() - 100.0 / 3.0).abs() < 1e-9);
+        assert_eq!(metrics.overall_precision(), 25.0);
+    }
+
+    #[test]
+    fn hit_rate_is_query_level_while_recall_is_label_level() {
+        // A four-label query with one retrieved label is a single hit, but
+        // only a quarter of its labels count toward recall.
+        let queries = vec![evaluated_query(
+            "multi",
+            &["a", "b", "c", "d"],
+            &[("a", 0.9), ("x", 0.8)],
+        )];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.positive_queries, 1);
+        assert_eq!(metrics.positive_queries_hit, 1);
+        assert_eq!(metrics.true_positive_docs, 1);
+        assert_eq!(metrics.total_labels, 4);
+        assert_eq!(metrics.label_recall(), 25.0);
+    }
+
+    #[test]
+    fn multi_label_recall_counts_each_labelled_document() {
+        let queries = vec![
+            evaluated_query(
+                "many",
+                &["a", "b", "c", "d"],
+                &[("a", 0.9), ("b", 0.8), ("c", 0.7), ("x", 0.6)],
+            ),
+            evaluated_query("one", &["e"], &[("e", 0.9)]),
+        ];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.true_positive_docs, 4);
+        assert_eq!(metrics.total_labels, 5);
+        assert_eq!(metrics.positive_queries_hit, 2);
+        assert_eq!(metrics.label_recall(), 80.0);
+    }
+
+    #[test]
+    fn mrr_uses_only_the_first_relevant_rank() {
+        // The best-ranked relevant document is second, so the relevant
+        // document ranked third must not be added in.
+        let queries = vec![evaluated_query(
+            "two-labels",
+            &["a", "b"],
+            &[("x", 0.9), ("a", 0.8), ("b", 0.7)],
+        )];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.reciprocal_rank_sum, 0.5);
+        assert_eq!(metrics.mrr_at_10(), 0.5);
+    }
+
+    #[test]
+    fn mrr_is_one_when_the_first_result_is_relevant() {
+        // A later relevant document must not change the rank-one result.
+        let queries = vec![evaluated_query(
+            "first",
+            &["a", "b"],
+            &[("a", 0.9), ("x", 0.8), ("b", 0.7)],
+        )];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.mrr_at_10(), 1.0);
+    }
+
+    #[test]
+    fn mrr_is_zero_when_no_relevant_result_is_returned() {
+        let queries = vec![
+            evaluated_query("found", &["a"], &[("a", 0.9)]),
+            evaluated_query("lost", &["b"], &[("x", 0.9)]),
+        ];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        // The missed query still counts toward the positive-query denominator.
+        assert_eq!(metrics.positive_queries, 2);
+        assert_eq!(metrics.positive_queries_hit, 1);
+        assert_eq!(metrics.mrr_at_10(), 0.5);
+    }
+
+    #[test]
+    fn relevant_document_at_rank_ten_counts() {
+        let queries = vec![evaluated_query(
+            "rank-ten",
+            &["a"],
+            &[
+                ("x0", 0.90),
+                ("x1", 0.89),
+                ("x2", 0.88),
+                ("x3", 0.87),
+                ("x4", 0.86),
+                ("x5", 0.85),
+                ("x6", 0.84),
+                ("x7", 0.83),
+                ("x8", 0.82),
+                ("a", 0.81),
+            ],
+        )];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.positive_queries_hit, 1);
+        assert_eq!(metrics.true_positive_docs, 1);
+        assert_eq!(metrics.label_recall(), 100.0);
+        assert_eq!(metrics.reciprocal_rank_sum, 0.1);
+        assert_eq!(metrics.mrr_at_10(), 0.1);
+    }
+
+    #[test]
+    fn relevant_document_beyond_the_top_ten_does_not_count() {
+        let queries = vec![evaluated_query(
+            "rank-eleven",
+            &["a"],
+            &[
+                ("x0", 0.91),
+                ("x1", 0.90),
+                ("x2", 0.89),
+                ("x3", 0.88),
+                ("x4", 0.87),
+                ("x5", 0.86),
+                ("x6", 0.85),
+                ("x7", 0.84),
+                ("x8", 0.83),
+                ("x9", 0.82),
+                ("a", 0.81),
+            ],
+        )];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        // The labelled document passes the threshold but sits outside the
+        // top-10 cap, so it counts neither as a hit nor as retrieved.
+        assert_eq!(metrics.positive_queries_hit, 0);
+        assert_eq!(metrics.true_positive_docs, 0);
+        assert_eq!(metrics.label_recall(), 0.0);
+        assert_eq!(metrics.mrr_at_10(), 0.0);
+        assert_eq!(metrics.positive_results, 10);
+        assert_eq!(metrics.positive_false_positive_docs, 10);
+    }
+
+    #[test]
+    fn negative_hit_count_and_result_count_are_distinct() {
+        let queries = vec![
+            evaluated_query(
+                "neg-many",
+                &[],
+                &[
+                    ("n0", 0.90),
+                    ("n1", 0.89),
+                    ("n2", 0.88),
+                    ("n3", 0.87),
+                    ("n4", 0.86),
+                    ("n5", 0.85),
+                    ("n6", 0.84),
+                    ("n7", 0.83),
+                    ("n8", 0.82),
+                    ("n9", 0.81),
+                    ("n10", 0.80),
+                    ("n11", 0.79),
+                ],
+            ),
+            evaluated_query("neg-one", &[], &[("only", 0.5)]),
+            evaluated_query("neg-none", &[], &[("weak", 0.1)]),
+        ];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.negative_queries, 3);
+        // Two of the three controls returned something ...
+        assert_eq!(metrics.negative_queries_hit, 2);
+        // ... but the returned-document count is capped at ten per query.
+        assert_eq!(metrics.negative_results, 11);
+        assert_eq!(metrics.total_results, 11);
+
+        // With no positive queries every rate falls back to zero, not NaN.
+        assert_eq!(metrics.positive_queries, 0);
+        assert_eq!(metrics.label_recall(), 0.0);
+        assert_eq!(metrics.mrr_at_10(), 0.0);
+        assert_eq!(metrics.positive_precision(), 0.0);
+        assert_eq!(metrics.overall_precision(), 0.0);
+    }
+
+    #[test]
+    fn precision_denominators_are_explicit() {
+        let queries = vec![
+            evaluated_query("hit", &["a"], &[("a", 0.9), ("x", 0.8)]),
+            evaluated_query("neg", &[], &[("n", 0.5)]),
+        ];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.true_positive_docs, 1);
+        assert_eq!(metrics.positive_results, 2);
+        assert_eq!(metrics.total_results, 3);
+        // Positive precision ignores the control result ...
+        assert!((metrics.positive_precision() - 50.0).abs() < 1e-9);
+        // ... while overall precision counts it as a false positive.
+        assert!((metrics.overall_precision() - 100.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn precision_is_zero_when_nothing_is_returned() {
+        let queries = vec![
+            evaluated_query("high", &["a"], &[("a", 0.1)]),
+            evaluated_query("higher", &["b", "c"], &[("b", 0.1)]),
+            evaluated_query("neg", &[], &[("n", 0.05)]),
+        ];
+        let metrics = evaluate_at(&queries, 0.25);
+
+        assert_eq!(metrics.positive_queries, 2);
+        assert_eq!(metrics.positive_queries_hit, 0);
+        assert_eq!(metrics.positive_results, 0);
+        assert_eq!(metrics.total_results, 0);
+        assert_eq!(metrics.total_labels, 3);
+
+        // Zero denominators report 0.0 rather than NaN.
+        assert_eq!(metrics.positive_precision(), 0.0);
+        assert_eq!(metrics.overall_precision(), 0.0);
+        assert_eq!(metrics.label_recall(), 0.0);
+        assert_eq!(metrics.mrr_at_10(), 0.0);
     }
 }
