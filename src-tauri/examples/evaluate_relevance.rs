@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -12,6 +13,8 @@ use std::path::PathBuf;
 const THRESHOLDS: [f32; 9] = [0.00, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50];
 const BASELINE_THRESHOLD: f32 = 0.25;
 const RESULT_LIMIT: usize = 10;
+const EXPLORATORY_CORPUS: &str = "evaluation/relevance-corpus.json";
+const BASELINE_ONLY_FLAG: &str = "--baseline-only";
 
 #[derive(Debug, Deserialize)]
 struct Corpus {
@@ -58,6 +61,54 @@ struct Metrics {
     total_results: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct Options {
+    corpus_path: PathBuf,
+    baseline_only: bool,
+}
+
+impl Options {
+    /// Argument defaults: sweep the exploratory corpus across every candidate
+    /// threshold. Baseline-only mode is opt-in via `--baseline-only <corpus>`,
+    /// which measures a single supplied corpus at the fixed production
+    /// threshold.
+    fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
+        let mut baseline_only = false;
+        let mut corpus_path = None;
+
+        for arg in args {
+            if arg == BASELINE_ONLY_FLAG {
+                baseline_only = true;
+            } else if arg.to_string_lossy().starts_with('-') {
+                return Err(format!("unknown option: {}", arg.to_string_lossy()));
+            } else if corpus_path.is_some() {
+                return Err(format!(
+                    "expected at most one corpus path, got an extra argument: {}",
+                    arg.to_string_lossy()
+                ));
+            } else {
+                corpus_path = Some(PathBuf::from(arg));
+            }
+        }
+
+        match (baseline_only, corpus_path) {
+            (true, Some(path)) => Ok(Self {
+                corpus_path: path,
+                baseline_only: true,
+            }),
+            (true, None) => Err(format!("{BASELINE_ONLY_FLAG} requires a corpus path")),
+            (false, None) => Ok(Self {
+                corpus_path: PathBuf::from(EXPLORATORY_CORPUS),
+                baseline_only: false,
+            }),
+            (false, Some(path)) => Err(format!(
+                "a corpus path must be paired with {BASELINE_ONLY_FLAG} (got {})",
+                path.display()
+            )),
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     if let Err(error) = run().await {
@@ -67,12 +118,14 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
-    let corpus_path = env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("evaluation/relevance-corpus.json"));
+    // Baseline-only mode is opt-in via `--baseline-only <corpus>`; with no
+    // arguments the exploratory corpus is swept across every candidate
+    // threshold. Deciding the mode from the mere presence of a path argument
+    // would misclassify the documented flag invocation.
+    let options = Options::parse(env::args_os().skip(1))
+        .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
 
-    let raw = fs::read_to_string(&corpus_path)?;
+    let raw = fs::read_to_string(&options.corpus_path)?;
     let corpus: Corpus = serde_json::from_str(&raw)?;
 
     validate_corpus(&corpus)
@@ -140,7 +193,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
     println!();
 
-    println!("\nThreshold comparison (maximum 10 results per query)");
+    if options.baseline_only {
+        println!(
+            "\nHeld-out corpus: measured only at the fixed production threshold \
+             ({BASELINE_THRESHOLD:.2}); the threshold sweep is reserved for the \
+             exploratory corpus."
+        );
+    } else {
+        println!("\nThreshold comparison (maximum {RESULT_LIMIT} results per query)");
+    }
     println!(
         "{:>9} {:>12} {:>13} {:>13} {:>12} {:>11} {:>11}",
         "Threshold",
@@ -152,7 +213,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         "Avg/query"
     );
 
-    for threshold in THRESHOLDS {
+    for threshold in thresholds_for(options.baseline_only) {
         let metrics = evaluate_at(&evaluated, threshold);
 
         let target_hits = format!(
@@ -301,6 +362,18 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a * norm_b)
 }
 
+/// The exploratory corpus is the only place threshold selection happens.
+/// Baseline-only mode measures a supplied (held-out) corpus solely at the
+/// fixed production threshold so its results cannot inform the choice of
+/// threshold.
+fn thresholds_for(baseline_only: bool) -> Vec<f32> {
+    if baseline_only {
+        vec![BASELINE_THRESHOLD]
+    } else {
+        THRESHOLDS.to_vec()
+    }
+}
+
 fn results_at(query: &EvaluatedQuery, threshold: f32) -> Vec<&ScoredDocument> {
     query
         .results
@@ -416,6 +489,10 @@ fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
 
     fn document(id: &str) -> Document {
         Document {
@@ -543,6 +620,72 @@ mod tests {
         assert!((cosine_similarity(&[1.0, 0.0], &[0.0, 1.0])).abs() < 1e-6);
         assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 2.0]), 0.0);
         assert_eq!(cosine_similarity(&[0.0, 0.0], &[0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn threshold_selection_covers_sweep_and_baseline_modes() {
+        assert_eq!(thresholds_for(false), THRESHOLDS.to_vec());
+        assert_eq!(thresholds_for(true), vec![BASELINE_THRESHOLD]);
+    }
+
+    #[test]
+    fn default_arguments_sweep_the_exploratory_corpus() {
+        let options = Options::parse(Vec::new()).expect("default options");
+
+        assert_eq!(options.corpus_path, PathBuf::from(EXPLORATORY_CORPUS));
+        assert!(!options.baseline_only);
+        assert_eq!(thresholds_for(options.baseline_only), THRESHOLDS.to_vec());
+    }
+
+    #[test]
+    fn baseline_only_flag_selects_the_supplied_corpus_and_baseline() {
+        let options = Options::parse(args(&[
+            "--baseline-only",
+            "evaluation/validation-corpus.json",
+        ]))
+        .expect("baseline-only options");
+
+        assert_eq!(
+            options.corpus_path,
+            PathBuf::from("evaluation/validation-corpus.json")
+        );
+        assert!(options.baseline_only);
+        assert_eq!(
+            thresholds_for(options.baseline_only),
+            vec![BASELINE_THRESHOLD]
+        );
+    }
+
+    #[test]
+    fn baseline_only_flag_is_not_parsed_as_a_corpus_path() {
+        let options = Options::parse(args(&[
+            "--baseline-only",
+            "evaluation/validation-corpus.json",
+        ]))
+        .expect("baseline-only options");
+
+        // The flag must be consumed as an option; otherwise the leading
+        // argument would be mistaken for the corpus path.
+        assert_ne!(options.corpus_path, PathBuf::from("--baseline-only"));
+    }
+
+    #[test]
+    fn baseline_only_without_a_corpus_is_rejected() {
+        let error = Options::parse(args(&["--baseline-only"])).expect_err("missing corpus");
+        assert!(error.contains("--baseline-only"));
+    }
+
+    #[test]
+    fn corpus_path_without_baseline_only_is_rejected() {
+        let error = Options::parse(args(&["evaluation/validation-corpus.json"]))
+            .expect_err("path needs the flag");
+        assert!(error.contains("--baseline-only"));
+    }
+
+    #[test]
+    fn unknown_options_are_rejected() {
+        let error = Options::parse(args(&["--sweep"])).expect_err("unknown option");
+        assert!(error.contains("unknown option"));
     }
 
     #[test]

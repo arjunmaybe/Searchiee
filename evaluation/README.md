@@ -22,15 +22,17 @@ cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance
 ```
 
 This evaluates the default exploratory corpus
-(`evaluation/relevance-corpus.json`). To evaluate the held-out
-validation corpus instead, pass its path as an argument:
+(`evaluation/relevance-corpus.json`) and compares all nine candidate
+thresholds. To evaluate the held-out validation corpus at the fixed
+production threshold only, pass `--baseline-only` followed by the corpus
+path:
 
 ```powershell
 $env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
-cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- evaluation\validation-corpus.json
+cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- --baseline-only evaluation\validation-corpus.json
 ```
 
-The first run downloads the local embedding model into the separate cache directory. Later runs reuse it. The evaluator uses Searchiee's existing local embedding function and compares candidate thresholds without changing the production threshold.
+The first run downloads the local embedding model into the separate cache directory. Later runs reuse it. The evaluator uses Searchiee's existing local embedding function. Running with no arguments sweeps every candidate threshold on the exploratory corpus. Passing `--baseline-only <corpus>` instead measures that corpus solely at the fixed production threshold (0.25), so the sweep cannot be used to tune against held-out data. A corpus path is only accepted together with `--baseline-only`; any other option is rejected. Production threshold behavior is never changed.
 
 ## Exploratory results
 
@@ -62,7 +64,7 @@ Like the exploratory corpus, this is a synthetic diagnostic dataset, not an inde
 
 ## Validation baseline at the production threshold (0.25)
 
-Observed by running the unchanged evaluator against the held-out corpus:
+Observed by running the evaluator against the held-out corpus, which reports only the fixed production threshold:
 
 - 24/24 positive queries returned at least one labelled relevant document.
 - 29/31 individual relevance labels were retrieved; the broad bicycle-maintenance query missed two labelled targets (8.6% and 0.6%).
