@@ -1,0 +1,519 @@
+{
+    "documents":  [
+                      {
+                          "id":  "d01",
+                          "title":  "Wastewater treatment",
+                          "content":  "Municipal wastewater treatment removes contaminants from used water before it is discharged into rivers or reused. Treatment plants use screening, sedimentation, biological processes, and disinfection to reduce suspended solids, organic matter, and harmful microorganisms."
+                      },
+                      {
+                          "id":  "d02",
+                          "title":  "Rainwater harvesting",
+                          "content":  "Rainwater harvesting captures runoff from roofs and other surfaces and stores it in tanks or cisterns. Filters and first-flush diverters improve water quality, while suitable storage and drainage systems help households conserve water during dry periods."
+                      },
+                      {
+                          "id":  "d03",
+                          "title":  "Composting organic waste",
+                          "content":  "Composting converts food scraps, leaves, and other organic waste into a soil amendment through microbial decomposition. A balanced mixture of carbon-rich dry material, nitrogen-rich green material, moisture, and oxygen helps produce stable compost for gardens."
+                      },
+                      {
+                          "id":  "d04",
+                          "title":  "Bird migration",
+                          "content":  "Bird migration is the seasonal movement of birds between breeding and nonbreeding habitats. Changes in daylight, temperature, food availability, and breeding conditions influence migration timing, while many species use inherited navigation cues and environmental landmarks."
+                      },
+                      {
+                          "id":  "d05",
+                          "title":  "Growing basil",
+                          "content":  "Basil is a culinary herb that grows well in warm conditions with several hours of sunlight and well-drained soil. Container-grown basil needs regular watering without waterlogged roots, occasional pruning, and enough space for healthy leaves and branching stems."
+                      },
+                      {
+                          "id":  "d06",
+                          "title":  "Password managers",
+                          "content":  "Password managers store login credentials in an encrypted vault protected by a master password or another authentication method. They can generate unique, strong passwords for websites, reduce password reuse, and help users fill credentials without memorizing every login."
+                      },
+                      {
+                          "id":  "d07",
+                          "title":  "Home router security",
+                          "content":  "A home Wi-Fi router should use modern wireless encryption, a unique administrator password, and updated firmware. Disabling insecure management services, reviewing connected devices, and replacing default credentials can reduce unauthorized access to the local network."
+                      },
+                      {
+                          "id":  "d08",
+                          "title":  "Solar photovoltaic panels",
+                          "content":  "Solar photovoltaic panels convert incoming sunlight into electrical energy using semiconductor cells. A rooftop system\u0027s output depends on panel capacity, orientation, shading, weather, temperature, and inverter efficiency. Household systems may store excess energy in batteries or export it to the grid."
+                      },
+                      {
+                          "id":  "d09",
+                          "title":  "Yeast bread baking",
+                          "content":  "Commercial baker\u0027s yeast ferments sugars in bread dough and releases carbon dioxide, which forms gas bubbles and makes the dough rise. Kneading develops gluten, while proofing time, dough temperature, hydration, and oven heat influence bread texture and volume."
+                      },
+                      {
+                          "id":  "d10",
+                          "title":  "Sourdough starter",
+                          "content":  "A sourdough starter is a culture of wild yeasts and lactic acid bacteria maintained with flour and water. Regular feeding supplies fresh nutrients, while temperature and hydration affect fermentation activity. A healthy starter produces gas and acidic compounds used to leaven and flavor bread."
+                      },
+                      {
+                          "id":  "d11",
+                          "title":  "Marine insurance",
+                          "content":  "Marine insurance can protect shipowners, cargo owners, and transport businesses against specified losses during sea transport. Hull coverage concerns vessels, cargo insurance concerns goods in transit, and marine liability coverage addresses certain legal liabilities subject to policy terms and exclusions."
+                      },
+                      {
+                          "id":  "d12",
+                          "title":  "Mortgage underwriting",
+                          "content":  "Mortgage underwriting evaluates whether a home loan applicant can repay a proposed loan. Lenders commonly examine income, employment history, existing debts, credit history, down payment, property valuation, and the relationship between monthly debt obligations and income."
+                      },
+                      {
+                          "id":  "d13",
+                          "title":  "Volcanic ash hazards",
+                          "content":  "Volcanic ash consists of fine fragments of rock, minerals, and volcanic glass produced during eruptions. Ash clouds can reduce visibility, contaminate water supplies, damage machinery, disrupt aviation, and cause respiratory irritation. Protective equipment and timely hazard warnings reduce exposure."
+                      },
+                      {
+                          "id":  "d14",
+                          "title":  "Plate tectonics",
+                          "content":  "Plate tectonics describes the movement and interaction of Earth\u0027s large lithospheric plates. Plates converge, separate, or slide past one another, contributing to earthquakes, volcanic activity, mountain building, ocean trenches, and the gradual movement of continents."
+                      },
+                      {
+                          "id":  "d15",
+                          "title":  "Employment law",
+                          "content":  "Employment law governs aspects of the relationship between employers and workers. Depending on the jurisdiction, it can regulate wages, working hours, discrimination, workplace safety, leave, disciplinary procedures, termination, and remedies available when employment rights are violated."
+                      },
+                      {
+                          "id":  "d16",
+                          "title":  "TLS keys and certificates",
+                          "content":  "Transport Layer Security uses cryptographic certificates and private keys to authenticate servers and establish secure connections. Certificate renewal prevents expiration-related outages, while controlled key rotation replaces cryptographic keys and requires careful deployment, validation, and secure handling of private key material."
+                      },
+                      {
+                          "id":  "d17",
+                          "title":  "Septic tank systems",
+                          "content":  "A septic system treats household wastewater on site, where solids settle in a tank and liquid effluent flows into a drain field. Bacteria in the tank break down some of the organic matter, and the surrounding soil filters and further treats the effluent before it rejoins the groundwater. Regular pumping removes accumulated sludge, and keeping grease and harsh chemicals out of drains helps the system keep working."
+                      },
+                      {
+                          "id":  "d18",
+                          "title":  "Testing private well water",
+                          "content":  "Private wells can pick up bacteria, nitrates, and minerals that public systems routinely monitor, so owners should have the water tested at least once a year. Laboratories report coliform bacteria, nitrate, pH, and hardness, and the results guide decisions about shock chlorination, filtration, or other treatment. Retesting after flooding, plumbing work, or unexplained illness is especially important."
+                      },
+                      {
+                          "id":  "d19",
+                          "title":  "Two-factor authentication",
+                          "content":  "Two-factor authentication adds a second proof of identity beyond a password, such as a one-time code from an authenticator app, a push approval, or a hardware security key. Because a stolen password alone is not enough to sign in, enabling a second factor blocks many account takeovers. Recovery codes should be saved somewhere safe, and hardware keys resist phishing better than codes that can be relayed."
+                      },
+                      {
+                          "id":  "d20",
+                          "title":  "Recognizing phishing messages",
+                          "content":  "Phishing messages impersonate a trusted sender to pressure people into clicking links, opening attachments, or handing over credentials. Common warning signs include mismatched sender domains, urgent or threatening wording, unexpected attachments, and requests to sign in through a link instead of typing the address. Confirming requests through a known channel and reporting suspicious messages limits the damage."
+                      },
+                      {
+                          "id":  "d21",
+                          "title":  "No-knead bread",
+                          "content":  "No-knead bread develops its structure through a long, slow fermentation of a wet dough rather than through energetic kneading. Mixing the few ingredients and letting the dough rest for many hours builds gluten and flavor, after which a brief fold and a preheated covered pot trap steam for a crisp crust. The method suits bakers who want good results with minimal handling."
+                      },
+                      {
+                          "id":  "d22",
+                          "title":  "Baking with whole wheat flour",
+                          "content":  "Whole wheat flour contains the bran and germ, which interrupt gluten strands and absorb more water than white flour. Doughs made with a large share of whole grain therefore rise less and finish denser unless they receive extra hydration, a longer rest, or a portion of white bread flour. Fresh whole-grain flour also tastes sweeter but turns rancid faster than refined flour."
+                      },
+                      {
+                          "id":  "d23",
+                          "title":  "Measuring earthquakes",
+                          "content":  "Seismographs record ground motion, and the resulting measurements describe an earthquake in more than one way. Magnitude estimates the energy released at the source, while intensity describes how strongly the shaking was felt at a particular place. Modern networks combine many stations to locate a quake and to issue rapid estimates of its size."
+                      },
+                      {
+                          "id":  "d24",
+                          "title":  "Tsunamis and warning systems",
+                          "content":  "Most destructive tsunamis form when an undersea earthquake suddenly displaces the seafloor and lifts a column of water that races across the ocean as long, low waves. Arrival times depend on water depth and distance, so warning centers combine seismic data with sea-level gauges and buoys to alert threatened coastlines. Moving to high ground as soon as strong shaking or a warning occurs saves lives."
+                      }
+                  ],
+    "queries":  [
+                    {
+                        "id":  "q01",
+                        "text":  "How do municipal plants clean used water before releasing it?",
+                        "relevant_document_ids":  [
+                                                      "d01"
+                                                  ]
+                    },
+                    {
+                        "id":  "q02",
+                        "text":  "How can a household collect roof runoff and save it in tanks?",
+                        "relevant_document_ids":  [
+                                                      "d02"
+                                                  ]
+                    },
+                    {
+                        "id":  "q03",
+                        "text":  "How do kitchen scraps and dry leaves decompose into garden soil?",
+                        "relevant_document_ids":  [
+                                                      "d03"
+                                                  ]
+                    },
+                    {
+                        "id":  "q04",
+                        "text":  "Why do birds travel between breeding and winter habitats each year?",
+                        "relevant_document_ids":  [
+                                                      "d04"
+                                                  ]
+                    },
+                    {
+                        "id":  "q05",
+                        "text":  "What sunlight, soil, and watering does basil need in a pot?",
+                        "relevant_document_ids":  [
+                                                      "d05"
+                                                  ]
+                    },
+                    {
+                        "id":  "q06",
+                        "text":  "What tool securely stores website logins and creates unique passwords?",
+                        "relevant_document_ids":  [
+                                                      "d06"
+                                                  ]
+                    },
+                    {
+                        "id":  "q07",
+                        "text":  "How can I stop strangers from accessing my home wireless router?",
+                        "relevant_document_ids":  [
+                                                      "d07"
+                                                  ]
+                    },
+                    {
+                        "id":  "q08",
+                        "text":  "How do rooftop photovoltaic cells generate household electricity?",
+                        "relevant_document_ids":  [
+                                                      "d08"
+                                                  ]
+                    },
+                    {
+                        "id":  "q09",
+                        "text":  "What causes bread dough to expand when commercial yeast ferments sugar?",
+                        "relevant_document_ids":  [
+                                                      "d09"
+                                                  ]
+                    },
+                    {
+                        "id":  "q10",
+                        "text":  "How should I feed and maintain a culture of wild yeast for sourdough?",
+                        "relevant_document_ids":  [
+                                                      "d10"
+                                                  ]
+                    },
+                    {
+                        "id":  "q11",
+                        "text":  "What insurance can cover ships and goods damaged during sea transport?",
+                        "relevant_document_ids":  [
+                                                      "d11"
+                                                  ]
+                    },
+                    {
+                        "id":  "q12",
+                        "text":  "How do lenders assess income and existing debt for a home loan?",
+                        "relevant_document_ids":  [
+                                                      "d12"
+                                                  ]
+                    },
+                    {
+                        "id":  "q13",
+                        "text":  "What damage and health risks can airborne debris from an eruption cause?",
+                        "relevant_document_ids":  [
+                                                      "d13"
+                                                  ]
+                    },
+                    {
+                        "id":  "q14",
+                        "text":  "How does movement of Earth\u0027s crust create mountains and earthquakes?",
+                        "relevant_document_ids":  [
+                                                      "d14"
+                                                  ]
+                    },
+                    {
+                        "id":  "q15",
+                        "text":  "What workplace rules govern wages, discrimination, and dismissal?",
+                        "relevant_document_ids":  [
+                                                      "d15"
+                                                  ]
+                    },
+                    {
+                        "id":  "q16",
+                        "text":  "How do I rotate server private keys and renew expiring HTTPS certificates?",
+                        "relevant_document_ids":  [
+                                                      "d16"
+                                                  ]
+                    },
+                    {
+                        "id":  "q17",
+                        "text":  "How should violinists and cellists practice intonation before an orchestra concert?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q18",
+                        "text":  "What symptoms indicate influenza and which treatments do clinicians prescribe?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q19",
+                        "text":  "How did ancient Roman aqueducts distribute water through cities?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q20",
+                        "text":  "How does compound interest affect long-term retirement savings?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q21",
+                        "text":  "How do I remove calcium scale from a showerhead and electric kettle?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q22",
+                        "text":  "How does a municipal utility calculate household water consumption charges?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q23",
+                        "text":  "How should swimming pool chlorine concentration and pH be maintained?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q24",
+                        "text":  "How do I configure quality of service settings to prioritize gaming traffic on a router?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q25",
+                        "text":  "How do websites verify identity before sending a password reset code by email?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q26",
+                        "text":  "How do shipping companies plan container loading sequences at a seaport?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q27",
+                        "text":  "How do lenders set interest rates for unsecured personal loans using credit scores?"
+                    },
+                    {
+                        "relevant_document_ids":  [
+
+                                                  ],
+                        "id":  "q28",
+                        "text":  "How do web servers negotiate TLS cipher suites and encryption parameters?"
+                    },
+                    {
+                        "id":  "q29",
+                        "text":  "septic tank maintance",
+                        "relevant_document_ids":  [
+                                                      "d17"
+                                                  ]
+                    },
+                    {
+                        "id":  "q30",
+                        "text":  "how do I know if my well water is safe to drink?",
+                        "relevant_document_ids":  [
+                                                      "d18"
+                                                  ]
+                    },
+                    {
+                        "id":  "q31",
+                        "text":  "What processes remove waste from water before it is released or returned to the ground?",
+                        "relevant_document_ids":  [
+                                                      "d01",
+                                                      "d17"
+                                                  ]
+                    },
+                    {
+                        "id":  "q32",
+                        "text":  "How can I reduce account takeovers caused by reused or stolen passwords?",
+                        "relevant_document_ids":  [
+                                                      "d06",
+                                                      "d19"
+                                                  ]
+                    },
+                    {
+                        "id":  "q33",
+                        "text":  "how can I tell if an email is a phising scam?",
+                        "relevant_document_ids":  [
+                                                      "d20"
+                                                  ]
+                    },
+                    {
+                        "id":  "q34",
+                        "text":  "What tools and habits keep my online accounts from being taken over?",
+                        "relevant_document_ids":  [
+                                                      "d06",
+                                                      "d19",
+                                                      "d20"
+                                                  ]
+                    },
+                    {
+                        "id":  "q35",
+                        "text":  "no knead bread recipie",
+                        "relevant_document_ids":  [
+                                                      "d21"
+                                                  ]
+                    },
+                    {
+                        "id":  "q36",
+                        "text":  "why does my wholemeal loaf come out heavy and small?",
+                        "relevant_document_ids":  [
+                                                      "d22"
+                                                  ]
+                    },
+                    {
+                        "id":  "q37",
+                        "text":  "What makes bread dough rise and affects the final volume?",
+                        "relevant_document_ids":  [
+                                                      "d09",
+                                                      "d10",
+                                                      "d21",
+                                                      "d22"
+                                                  ]
+                    },
+                    {
+                        "id":  "q38",
+                        "text":  "earthquake magnitude seismograph",
+                        "relevant_document_ids":  [
+                                                      "d23"
+                                                  ]
+                    },
+                    {
+                        "id":  "q39",
+                        "text":  "what sets off a tsunami and who issues the warnings?",
+                        "relevant_document_ids":  [
+                                                      "d24"
+                                                  ]
+                    },
+                    {
+                        "id":  "q40",
+                        "text":  "How do earthquakes and tsunamis arise from moving tectonic plates?",
+                        "relevant_document_ids":  [
+                                                      "d14",
+                                                      "d24"
+                                                  ]
+                    },
+                    {
+                        "id":  "q41",
+                        "text":  "How do I unclog a kitchen sink drain with a plunger?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q42",
+                        "text":  "Can seawater be turned into drinking water at a desalination plant?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q43",
+                        "text":  "How do I keep outdoor water pipes from freezing in winter?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q44",
+                        "text":  "How do I reset a forgotten Windows account password?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q45",
+                        "text":  "How is a corporate firewall configured to block network intrusions?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q46",
+                        "text":  "How do I set up a personal VPN to hide my browsing traffic?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q47",
+                        "text":  "How do I bake gluten-free bread that still rises well?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q48",
+                        "text":  "How do I laminate butter into croissant dough?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q49",
+                        "text":  "How should I store a baked loaf so it stays fresh for days?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q50",
+                        "text":  "How are hurricanes rated by wind speed?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q51",
+                        "text":  "How do geologists date rock layers using index fossils?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q52",
+                        "text":  "What causes the aurora borealis?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q53",
+                        "text":  "How do I build a raised garden bed from timber?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q54",
+                        "text":  "What is the difference between a mortgage broker and a financial advisor?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q55",
+                        "text":  "How do I appeal a rejected home insurance claim?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    }
+                ]
+}

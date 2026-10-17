@@ -1,0 +1,306 @@
+{
+    "documents": [
+        {
+            "id": "v01",
+            "title": "Assembling a Langstroth beehive",
+            "content": "A Langstroth hive stacks wooden boxes of removable frames above a bottom board, topped with an inner cover and a weatherproof roof. Place the hive on a level stand facing morning sun with a nearby water source, leaving working space behind the boxes for inspections. New beekeepers usually start with a single deep brood box and add honey supers only when the colony has drawn out most of the existing frames."
+        },
+        {
+            "id": "v02",
+            "title": "Monitoring varroa mites",
+            "content": "Varroa destructor mites parasitize honeybees and spread viruses, so colonies need regular monitoring from spring through autumn. A sugar shake rolls a measured sample of nurse bees in powdered sugar to dislodge mites for counting, while a sticky board under a screened bottom captures natural mite drop over several days. Treatment thresholds depend on the season and local guidance, and counts should be recorded so trends are visible across inspections."
+        },
+        {
+            "id": "v03",
+            "title": "Harvesting and bottling honey",
+            "content": "Honey is ready to harvest when most cells in a super are capped with wax, which signals low moisture content. Beekeepers uncap the frames with a heated knife, spin them in a centrifugal extractor, then strain and settle the honey before bottling. Always leave the colony enough stores for winter and never harvest from a brood box that contains developing bees."
+        },
+        {
+            "id": "v04",
+            "title": "Repairing a punctured inner tube",
+            "content": "To fix a flat tire, remove the wheel, lever one bead of the tire off the rim, and pull out the inner tube without pinching it further. Inflate the tube slightly to find the puncture by listening or submerging it in water, then roughen the area, apply vulcanizing fluid, and press on a patch. Before reassembling, run a finger inside the tire casing to find the thorn or glass that caused the flat."
+        },
+        {
+            "id": "v05",
+            "title": "Adjusting rim brakes",
+            "content": "Squeaking or rubbing rim brakes usually mean the pads strike the rim at the wrong angle or the wheel runs untrue. Set each pad to contact the braking surface squarely with a slight toe-in at the front edge, and center the caliper so both pads clear the rim equally when released. Replace pads worn past their indicator grooves, since hardened or thin pads lengthen stopping distance, especially in wet weather."
+        },
+        {
+            "id": "v06",
+            "title": "Cleaning and lubricating a chain",
+            "content": "A gritty drivetrain wears out chains and sprockets prematurely, so wipe the chain clean and apply lubricant drop by drop to each roller rather than flooding it. Let the lube penetrate for a few minutes, then wipe off the excess so dirt has nothing to cling to. Measure chain stretch with a wear gauge periodically; replacing a worn chain early protects the far more expensive cassette and chainrings."
+        },
+        {
+            "id": "v07",
+            "title": "Centering clay on the wheel",
+            "content": "Centering begins with wedged clay slapped firmly onto a damp wheel head, followed by steady inward pressure at medium speed until all wobble disappears. Once centered, open the form with thumbs held together, then pull the walls upward with even, lubricated pressure from both hands. Rushing this stage leaves thick bottoms and uneven walls that no amount of later trimming can fully correct."
+        },
+        {
+            "id": "v08",
+            "title": "Applying ceramic glaze",
+            "content": "Glaze thickness determines the fired result: too thin looks washed out, while too thick runs and sticks to kiln shelves. Bisque-fired ware should be clean and dry before dipping each piece with a smooth, confident motion, keeping rims and feet wiped free of glaze. Test new glaze combinations on small tiles first, since overlapping glazes can shift color dramatically in the kiln."
+        },
+        {
+            "id": "v09",
+            "title": "Kiln firing schedules and cones",
+            "content": "Stoneware typically fires to cone 6, reached through a controlled schedule with a slow climb through quartz inversion and an adequate soak at peak temperature. Pyrometric cones placed where they are visible through the peephole bend as heat-work accumulates, confirming what the controller reports. Ventilate the kiln room well, and never open a hot kiln, since thermal shock can crack both ware and elements."
+        },
+        {
+            "id": "v10",
+            "title": "Long-tail cast-on",
+            "content": "The long-tail cast-on creates a stretchy, durable starting edge using both the working yarn and a measured tail. Estimate roughly one inch of tail per stitch plus a spare length, form a slingshot around thumb and finger, and draw each new loop through with the needle in a steady rhythm. A tail that is too short forces a restart, so beginners should err on the generous side."
+        },
+        {
+            "id": "v11",
+            "title": "Knitting cables",
+            "content": "Cables are made by holding a small group of stitches to the front or back on a cable needle while the next group is worked, then knitting the held stitches to cross the columns. Reading the chart row by row keeps the twist direction consistent, and a row counter prevents drifting off pattern over long repeats. Blocking at the end opens up the texture so the cables stand out crisply."
+        },
+        {
+            "id": "v12",
+            "title": "Blocking finished knits",
+            "content": "Blocking evens out stitches and sets a garment to its intended measurements. Soak the finished piece in lukewarm water with a little wool wash, gently press out moisture in a towel without wringing, then pin it to the schematic dimensions on blocking mats. Lace and cables transform most dramatically, while stockinette relaxes into a smoother, more uniform fabric as it dries."
+        },
+        {
+            "id": "v13",
+            "title": "Dialing in espresso",
+            "content": "Sour, fast-flowing espresso usually means the grind is too coarse or the dose too low for the basket. Adjust the grinder finer in small steps while keeping dose and yield fixed, aiming for a balanced shot where sweetness offsets acidity. Once the timing lands in the expected window, change only one variable at a time so each adjustment stays interpretable."
+        },
+        {
+            "id": "v14",
+            "title": "Pour-over technique",
+            "content": "A clean pour-over cup starts with a medium-fine grind, rinsed filter, and water just off the boil. Bloom the grounds with twice their weight in water, then pour in slow concentric spirals, keeping the slurry level steady rather than flooding or stalling the bed. Astringency often traces back to an excessively fine grind or an overlong drawdown through a clogged filter."
+        },
+        {
+            "id": "v15",
+            "title": "Steaming milk microfoam",
+            "content": "Glossy microfoam comes from aerating cold milk briefly at the start, then burying the steam tip to spin the milk into a vortex that folds in tiny bubbles. The pitcher should feel hot but not scalding, and the finished texture should look like wet paint with no visible foam cap. Pour promptly, since the foam separates if the milk sits."
+        },
+        {
+            "id": "v16",
+            "title": "Fishless tank cycling",
+            "content": "A new aquarium must grow nitrifying bacteria before fish arrive, a process called fishless cycling. Dose pure ammonia to a few parts per million and test daily until ammonia and nitrite both fall to zero within twenty-four hours of dosing, which shows the filter can process waste. Only then should livestock be added gradually, since an uncycled tank exposes fish to toxic ammonia spikes."
+        },
+        {
+            "id": "v17",
+            "title": "Testing aquarium water",
+            "content": "Liquid test kits measure the nitrogen compounds that matter most: ammonia and nitrite must read zero in an established tank, while nitrate is kept low through partial water changes. Test before and after maintenance to distinguish a stable system from one drifting toward trouble, and always shake reagent bottles as directed because settled reagents give false low readings. Log every result so slow trends are visible over weeks."
+        },
+        {
+            "id": "v18",
+            "title": "Laying out a planted aquascape",
+            "content": "A balanced aquascape starts with nutrient-rich substrate sloped higher toward the back, hardscape stones or driftwood placed by thirds, and plants grouped by height with tall species behind. Foreground carpets need strong light and often injected carbon dioxide, while slow-growing epiphytes tied to wood tolerate dimmer corners. Plant heavily from day one so fast growers outcompete algae while the system matures."
+        },
+        {
+            "id": "v19",
+            "title": "Finding constellations with a planisphere",
+            "content": "A planisphere is a rotating star wheel that shows which constellations are above the horizon for any date and hour. Dial in the current time, hold the wheel overhead with north at the bottom edge, and match the brightest plotted stars to the sky before tracing the fainter pattern stars. Dark adaptation takes about twenty minutes, so avoid white flashlights and let your eyes adjust before hunting dim targets."
+        },
+        {
+            "id": "v20",
+            "title": "Collimating a Newtonian telescope",
+            "content": "A Newtonian reflector performs poorly when its mirrors drift out of alignment, producing comets instead of points at high magnification. Center the secondary mirror under the focuser, then adjust the primary until a collimation cap shows the reflected spot concentric with the mirror clips. Recheck after transporting the scope, since bumps shift alignment more than temperature changes do."
+        },
+        {
+            "id": "v21",
+            "title": "Stacking night-sky exposures",
+            "content": "Stacking combines many short exposures so random noise averages away while the faint signal adds up. Capture dozens of light frames plus calibration frames, align them on the stars to correct for drift between shots, and let the stacking software reject satellite trails and hot pixels by comparing across frames. The result holds far more detail than any single exposure of the same total length."
+        },
+        {
+            "id": "v22",
+            "title": "Ideas in the Italian Game",
+            "content": "The Italian Game develops quickly toward the center with knights and bishops aimed at the kingside. White typically builds pressure with pawn advances and piece coordination rather than memorizing long forced lines, keeping the option of castling into safety. Black must challenge the center in time or risk being squeezed, often by striking back with a well-timed pawn break."
+        },
+        {
+            "id": "v23",
+            "title": "The opposition in king-and-pawn endings",
+            "content": "When only kings and one pawn remain, the opposition — kings standing two squares apart with the mover unable to advance — often decides the game. The defending king aims to seize the opposition in front of the pawn's path, while the attacker tries to outflank once the pawn is securely defended. Counting whether key squares are reachable usually settles these endings before a single pawn move is played."
+        },
+        {
+            "id": "v24",
+            "title": "Managing a tournament chess clock",
+            "content": "Good clock management means spending minutes where they change the evaluation and moving promptly in familiar positions. Build a time reserve in the opening, invest it in one or two critical middlegame decisions, and keep enough for the complications of time trouble. Players who burn half their clock on move ten usually blunder around move twenty-five with seconds remaining."
+        }
+    ],
+    "queries": [
+        {
+            "id": "vq01",
+            "text": "How do I put together and position a hive box for my first bee colony?",
+            "relevant_document_ids": ["v01"]
+        },
+        {
+            "id": "vq02",
+            "text": "What are sugar shakes and sticky boards used to check for in hives?",
+            "relevant_document_ids": ["v02"]
+        },
+        {
+            "id": "vq03",
+            "text": "What does a first-year beekeeper need for healthy colonies and a honey harvest?",
+            "relevant_document_ids": ["v01", "v02", "v03"]
+        },
+        {
+            "id": "vq04",
+            "text": "My rear tire went flat commuting to work; how do I patch the inner tube?",
+            "relevant_document_ids": ["v04"]
+        },
+        {
+            "id": "vq05",
+            "text": "How do I stop squeaky rim brakes from rubbing against the wheel?",
+            "relevant_document_ids": ["v05"]
+        },
+        {
+            "id": "vq06",
+            "text": "What routine upkeep keeps a commuter bicycle reliable?",
+            "relevant_document_ids": ["v04", "v05", "v06"]
+        },
+        {
+            "id": "vq07",
+            "text": "How do I center clay and pull even walls on a pottery wheel?",
+            "relevant_document_ids": ["v07"]
+        },
+        {
+            "id": "vq08",
+            "text": "How do glaze thickness and firing schedules work together for stoneware pots?",
+            "relevant_document_ids": ["v08", "v09"]
+        },
+        {
+            "id": "vq09",
+            "text": "What cone and temperature schedule should a stoneware kiln load follow?",
+            "relevant_document_ids": ["v09"]
+        },
+        {
+            "id": "vq10",
+            "text": "How do I start a knitting project with a stretchy long-tail edge?",
+            "relevant_document_ids": ["v10"]
+        },
+        {
+            "id": "vq11",
+            "text": "How do I knit textured sweaters with crossing stitches and finish them neatly?",
+            "relevant_document_ids": ["v11", "v12"]
+        },
+        {
+            "id": "vq12",
+            "text": "Why soak and pin out a finished sweater, and what does it change?",
+            "relevant_document_ids": ["v12"]
+        },
+        {
+            "id": "vq13",
+            "text": "Why does my espresso run too fast and taste sour?",
+            "relevant_document_ids": ["v13"]
+        },
+        {
+            "id": "vq14",
+            "text": "What grind size and pouring pattern make a clean V60 cup?",
+            "relevant_document_ids": ["v14"]
+        },
+        {
+            "id": "vq15",
+            "text": "How do grind adjustments and steamed milk texture affect a flat white?",
+            "relevant_document_ids": ["v13", "v15"]
+        },
+        {
+            "id": "vq16",
+            "text": "How do I prepare a new fish tank with ammonia before adding any fish?",
+            "relevant_document_ids": ["v16"]
+        },
+        {
+            "id": "vq17",
+            "text": "What do ammonia, nitrite, and nitrate readings tell me about my aquarium?",
+            "relevant_document_ids": ["v17"]
+        },
+        {
+            "id": "vq18",
+            "text": "How do I arrange substrate, rocks, and plants for a balanced aquascape?",
+            "relevant_document_ids": ["v18"]
+        },
+        {
+            "id": "vq19",
+            "text": "How can I identify constellations using a rotating star wheel?",
+            "relevant_document_ids": ["v19"]
+        },
+        {
+            "id": "vq20",
+            "text": "How do I align the mirrors inside a reflector telescope?",
+            "relevant_document_ids": ["v20"]
+        },
+        {
+            "id": "vq21",
+            "text": "How do I combine many short exposures into a cleaner deep-sky photo?",
+            "relevant_document_ids": ["v21"]
+        },
+        {
+            "id": "vq22",
+            "text": "What plans and pawn breaks matter in the Italian Game opening?",
+            "relevant_document_ids": ["v22"]
+        },
+        {
+            "id": "vq23",
+            "text": "How does king opposition decide whether a lone pawn promotes?",
+            "relevant_document_ids": ["v23"]
+        },
+        {
+            "id": "vq24",
+            "text": "How should I budget my minutes across the phases of a tournament game?",
+            "relevant_document_ids": ["v24"]
+        },
+        {
+            "id": "vq25",
+            "text": "What certification and open-water dives are required for scuba divers?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq26",
+            "text": "Which deductions can freelance workers claim on an annual tax return?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq27",
+            "text": "What are the five basic foot positions in classical ballet?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq28",
+            "text": "What did lighthouse keepers do each night before automation?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq29",
+            "text": "How do I transfer between subway lines when navigating Tokyo?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq30",
+            "text": "What timeline should a couple follow when planning a wedding?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq31",
+            "text": "How should I treat a bee sting and reduce the swelling?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq32",
+            "text": "Can a cracked aluminum bicycle frame be welded back together safely?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq33",
+            "text": "How do I formulate a porcelain clay body from raw materials?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq34",
+            "text": "How do I roast green coffee beans at home for espresso?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq35",
+            "text": "How do I breed clownfish and raise the fry in a home aquarium?",
+            "relevant_document_ids": []
+        },
+        {
+            "id": "vq36",
+            "text": "When and where will the next total solar eclipse be visible?",
+            "relevant_document_ids": []
+        }
+    ]
+}
