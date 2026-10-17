@@ -79,6 +79,46 @@
                           "id":  "d16",
                           "title":  "TLS keys and certificates",
                           "content":  "Transport Layer Security uses cryptographic certificates and private keys to authenticate servers and establish secure connections. Certificate renewal prevents expiration-related outages, while controlled key rotation replaces cryptographic keys and requires careful deployment, validation, and secure handling of private key material."
+                      },
+                      {
+                          "id":  "d17",
+                          "title":  "Septic tank systems",
+                          "content":  "A septic system treats household wastewater on site, where solids settle in a tank and liquid effluent flows into a drain field. Bacteria in the tank break down some of the organic matter, and the surrounding soil filters and further treats the effluent before it rejoins the groundwater. Regular pumping removes accumulated sludge, and keeping grease and harsh chemicals out of drains helps the system keep working."
+                      },
+                      {
+                          "id":  "d18",
+                          "title":  "Testing private well water",
+                          "content":  "Private wells can pick up bacteria, nitrates, and minerals that public systems routinely monitor, so owners should have the water tested at least once a year. Laboratories report coliform bacteria, nitrate, pH, and hardness, and the results guide decisions about shock chlorination, filtration, or other treatment. Retesting after flooding, plumbing work, or unexplained illness is especially important."
+                      },
+                      {
+                          "id":  "d19",
+                          "title":  "Two-factor authentication",
+                          "content":  "Two-factor authentication adds a second proof of identity beyond a password, such as a one-time code from an authenticator app, a push approval, or a hardware security key. Because a stolen password alone is not enough to sign in, enabling a second factor blocks many account takeovers. Recovery codes should be saved somewhere safe, and hardware keys resist phishing better than codes that can be relayed."
+                      },
+                      {
+                          "id":  "d20",
+                          "title":  "Recognizing phishing messages",
+                          "content":  "Phishing messages impersonate a trusted sender to pressure people into clicking links, opening attachments, or handing over credentials. Common warning signs include mismatched sender domains, urgent or threatening wording, unexpected attachments, and requests to sign in through a link instead of typing the address. Confirming requests through a known channel and reporting suspicious messages limits the damage."
+                      },
+                      {
+                          "id":  "d21",
+                          "title":  "No-knead bread",
+                          "content":  "No-knead bread develops its structure through a long, slow fermentation of a wet dough rather than through energetic kneading. Mixing the few ingredients and letting the dough rest for many hours builds gluten and flavor, after which a brief fold and a preheated covered pot trap steam for a crisp crust. The method suits bakers who want good results with minimal handling."
+                      },
+                      {
+                          "id":  "d22",
+                          "title":  "Baking with whole wheat flour",
+                          "content":  "Whole wheat flour contains the bran and germ, which interrupt gluten strands and absorb more water than white flour. Doughs made with a large share of whole grain therefore rise less and finish denser unless they receive extra hydration, a longer rest, or a portion of white bread flour. Fresh whole-grain flour also tastes sweeter but turns rancid faster than refined flour."
+                      },
+                      {
+                          "id":  "d23",
+                          "title":  "Measuring earthquakes",
+                          "content":  "Seismographs record ground motion, and the resulting measurements describe an earthquake in more than one way. Magnitude estimates the energy released at the source, while intensity describes how strongly the shaking was felt at a particular place. Modern networks combine many stations to locate a quake and to issue rapid estimates of its size."
+                      },
+                      {
+                          "id":  "d24",
+                          "title":  "Tsunamis and warning systems",
+                          "content":  "Most destructive tsunamis form when an undersea earthquake suddenly displaces the seafloor and lifts a column of water that races across the ocean as long, low waves. Arrival times depend on water depth and distance, so warning centers combine seismic data with sea-level gauges and buoys to alert threatened coastlines. Moving to high ground as soon as strong shaking or a warning occurs saves lives."
                       }
                   ],
     "queries":  [
@@ -277,6 +317,203 @@
                                                   ],
                         "id":  "q28",
                         "text":  "How do web servers negotiate TLS cipher suites and encryption parameters?"
+                    },
+                    {
+                        "id":  "q29",
+                        "text":  "septic tank maintance",
+                        "relevant_document_ids":  [
+                                                      "d17"
+                                                  ]
+                    },
+                    {
+                        "id":  "q30",
+                        "text":  "how do I know if my well water is safe to drink?",
+                        "relevant_document_ids":  [
+                                                      "d18"
+                                                  ]
+                    },
+                    {
+                        "id":  "q31",
+                        "text":  "What processes remove waste from water before it is released or returned to the ground?",
+                        "relevant_document_ids":  [
+                                                      "d01",
+                                                      "d17"
+                                                  ]
+                    },
+                    {
+                        "id":  "q32",
+                        "text":  "How can I reduce account takeovers caused by reused or stolen passwords?",
+                        "relevant_document_ids":  [
+                                                      "d06",
+                                                      "d19"
+                                                  ]
+                    },
+                    {
+                        "id":  "q33",
+                        "text":  "how can I tell if an email is a phising scam?",
+                        "relevant_document_ids":  [
+                                                      "d20"
+                                                  ]
+                    },
+                    {
+                        "id":  "q34",
+                        "text":  "What tools and habits keep my online accounts from being taken over?",
+                        "relevant_document_ids":  [
+                                                      "d06",
+                                                      "d19",
+                                                      "d20"
+                                                  ]
+                    },
+                    {
+                        "id":  "q35",
+                        "text":  "no knead bread recipie",
+                        "relevant_document_ids":  [
+                                                      "d21"
+                                                  ]
+                    },
+                    {
+                        "id":  "q36",
+                        "text":  "why does my wholemeal loaf come out heavy and small?",
+                        "relevant_document_ids":  [
+                                                      "d22"
+                                                  ]
+                    },
+                    {
+                        "id":  "q37",
+                        "text":  "What makes bread dough rise and affects the final volume?",
+                        "relevant_document_ids":  [
+                                                      "d09",
+                                                      "d10",
+                                                      "d21",
+                                                      "d22"
+                                                  ]
+                    },
+                    {
+                        "id":  "q38",
+                        "text":  "earthquake magnitude seismograph",
+                        "relevant_document_ids":  [
+                                                      "d23"
+                                                  ]
+                    },
+                    {
+                        "id":  "q39",
+                        "text":  "what sets off a tsunami and who issues the warnings?",
+                        "relevant_document_ids":  [
+                                                      "d24"
+                                                  ]
+                    },
+                    {
+                        "id":  "q40",
+                        "text":  "How do earthquakes and tsunamis arise from moving tectonic plates?",
+                        "relevant_document_ids":  [
+                                                      "d14",
+                                                      "d24"
+                                                  ]
+                    },
+                    {
+                        "id":  "q41",
+                        "text":  "How do I unclog a kitchen sink drain with a plunger?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q42",
+                        "text":  "Can seawater be turned into drinking water at a desalination plant?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q43",
+                        "text":  "How do I keep outdoor water pipes from freezing in winter?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q44",
+                        "text":  "How do I reset a forgotten Windows account password?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q45",
+                        "text":  "How is a corporate firewall configured to block network intrusions?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q46",
+                        "text":  "How do I set up a personal VPN to hide my browsing traffic?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q47",
+                        "text":  "How do I bake gluten-free bread that still rises well?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q48",
+                        "text":  "How do I laminate butter into croissant dough?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q49",
+                        "text":  "How should I store a baked loaf so it stays fresh for days?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q50",
+                        "text":  "How are hurricanes rated by wind speed?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q51",
+                        "text":  "How do geologists date rock layers using index fossils?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q52",
+                        "text":  "What causes the aurora borealis?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q53",
+                        "text":  "How do I build a raised garden bed from timber?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q54",
+                        "text":  "What is the difference between a mortgage broker and a financial advisor?",
+                        "relevant_document_ids":  [
+
+                                                  ]
+                    },
+                    {
+                        "id":  "q55",
+                        "text":  "How do I appeal a rejected home insurance claim?",
+                        "relevant_document_ids":  [
+
+                                                  ]
                     }
                 ]
 }
