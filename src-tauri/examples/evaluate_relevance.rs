@@ -15,6 +15,7 @@ const BASELINE_THRESHOLD: f32 = 0.25;
 const RESULT_LIMIT: usize = 10;
 const EXPLORATORY_CORPUS: &str = "evaluation/relevance-corpus.json";
 const BASELINE_ONLY_FLAG: &str = "--baseline-only";
+const SUMMARY_ONLY_FLAG: &str = "--summary-only";
 
 #[derive(Debug, Deserialize)]
 struct Corpus {
@@ -49,7 +50,7 @@ struct EvaluatedQuery {
     results: Vec<ScoredDocument>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 struct Metrics {
     positive_queries: usize,
     positive_queries_hit: usize,
@@ -114,20 +115,27 @@ impl Metrics {
 struct Options {
     corpus_path: PathBuf,
     baseline_only: bool,
+    summary_only: bool,
 }
 
 impl Options {
     /// Argument defaults: sweep the exploratory corpus across every candidate
     /// threshold. Baseline-only mode is opt-in via `--baseline-only <corpus>`,
     /// which measures a single supplied corpus at the fixed production
-    /// threshold.
+    /// threshold. `--summary-only` suppresses the per-query detail block and is
+    /// only meaningful next to `--baseline-only`, so it is rejected elsewhere.
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
         let mut baseline_only = false;
+        let mut summary_only = false;
         let mut corpus_path = None;
 
         for arg in args {
+            // Both flags must be matched before the generic '-' branch, or the
+            // summary-only flag would be reported as an unknown option.
             if arg == BASELINE_ONLY_FLAG {
                 baseline_only = true;
+            } else if arg == SUMMARY_ONLY_FLAG {
+                summary_only = true;
             } else if arg.to_string_lossy().starts_with('-') {
                 return Err(format!("unknown option: {}", arg.to_string_lossy()));
             } else if corpus_path.is_some() {
@@ -140,17 +148,26 @@ impl Options {
             }
         }
 
-        match (baseline_only, corpus_path) {
-            (true, Some(path)) => Ok(Self {
+        match (baseline_only, corpus_path, summary_only) {
+            (true, Some(path), summary_only) => Ok(Self {
                 corpus_path: path,
                 baseline_only: true,
+                summary_only,
             }),
-            (true, None) => Err(format!("{BASELINE_ONLY_FLAG} requires a corpus path")),
-            (false, None) => Ok(Self {
+            (true, None, _) => Err(format!("{BASELINE_ONLY_FLAG} requires a corpus path")),
+            (false, None, true) => Err(format!(
+                "{SUMMARY_ONLY_FLAG} requires {BASELINE_ONLY_FLAG} with a corpus path"
+            )),
+            (false, None, false) => Ok(Self {
                 corpus_path: PathBuf::from(EXPLORATORY_CORPUS),
                 baseline_only: false,
+                summary_only: false,
             }),
-            (false, Some(path)) => Err(format!(
+            (false, Some(path), true) => Err(format!(
+                "{SUMMARY_ONLY_FLAG} requires {BASELINE_ONLY_FLAG}, which was not given (got {})",
+                path.display()
+            )),
+            (false, Some(path), false) => Err(format!(
                 "a corpus path must be paired with {BASELINE_ONLY_FLAG} (got {})",
                 path.display()
             )),
@@ -242,16 +259,43 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
     println!();
 
+    let mut stdout = io::stdout();
+    write_report(&mut stdout, &evaluated, &options)?;
+
+    println!(
+        "\nEvaluation note: this is a small synthetic corpus with \
+         author-assigned relevance labels. Treat the results as \
+         diagnostic evidence, not a general relevance benchmark."
+    );
+
+    Ok(())
+}
+
+/// Renders everything a run prints after the progress lines: the mode banner,
+/// the aggregate metrics table, and — only when details are enabled — the
+/// per-query block. Writing through an `io::Write` sink keeps the real output
+/// path testable in memory instead of only observable by running the example.
+fn write_report<W: Write>(
+    out: &mut W,
+    evaluated: &[EvaluatedQuery],
+    options: &Options,
+) -> io::Result<()> {
     if options.baseline_only {
-        println!(
-            "\nHeld-out corpus: measured only at the fixed production threshold \
+        writeln!(
+            out,
+            "\nSupplied corpus: evaluated only at the fixed production threshold \
              ({BASELINE_THRESHOLD:.2}); the threshold sweep is reserved for the \
              exploratory corpus."
-        );
+        )?;
     } else {
-        println!("\nThreshold comparison (maximum {RESULT_LIMIT} results per query)");
+        writeln!(
+            out,
+            "\nThreshold comparison (maximum {RESULT_LIMIT} results per query)"
+        )?;
     }
-    println!(
+
+    writeln!(
+        out,
         "{:>9} {:>9} {:>10} {:>8} {:>8} {:>11} {:>13} {:>9} {:>12} {:>10}",
         "Threshold",
         "Pos hit",
@@ -263,11 +307,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         "Neg hit",
         "Neg results",
         "Avg/query"
-    );
+    )?;
 
-    for threshold in thresholds_for(options.baseline_only) {
-        let metrics = evaluate_at(&evaluated, threshold);
-
+    for (threshold, metrics) in metric_rows(evaluated, options) {
         let positive_hits = format!(
             "{}/{}",
             metrics.positive_queries_hit, metrics.positive_queries
@@ -279,7 +321,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
         let average_results = metrics.total_results as f64 / evaluated.len() as f64;
 
-        println!(
+        writeln!(
+            out,
             "{:>9.2} {:>9} {:>9.1}% {:>8.3} {:>8} {:>10.1}% {:>12.1}% {:>9} {:>12} {:>10.2}",
             threshold,
             positive_hits,
@@ -291,16 +334,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
             negative_hits,
             metrics.negative_results,
             average_results
-        );
+        )?;
     }
 
-    print_baseline_details(&evaluated, BASELINE_THRESHOLD);
-
-    println!(
-        "\nEvaluation note: this is a small synthetic corpus with \
-         author-assigned relevance labels. Treat the results as \
-         diagnostic evidence, not a general relevance benchmark."
-    );
+    // `write_baseline_details` is the only place query text, per-query
+    // scores, ranks, and document titles reach stdout, so suppressing it is
+    // what keeps a sealed run aggregate-only. The aggregate table is emitted
+    // from `metric_rows` regardless of this switch.
+    if emits_query_details(options) {
+        write_baseline_details(out, evaluated, BASELINE_THRESHOLD)?;
+    }
 
     Ok(())
 }
@@ -423,6 +466,21 @@ fn thresholds_for(baseline_only: bool) -> Vec<f32> {
     }
 }
 
+/// The aggregate metrics reported by a run, one row per threshold. These are
+/// produced independently of `--summary-only`, so suppressing the per-query
+/// detail block never changes a measurement, only what is printed.
+fn metric_rows(queries: &[EvaluatedQuery], options: &Options) -> Vec<(f32, Metrics)> {
+    thresholds_for(options.baseline_only)
+        .into_iter()
+        .map(|threshold| (threshold, evaluate_at(queries, threshold)))
+        .collect()
+}
+
+/// Whether the per-query detail block is printed for these options.
+fn emits_query_details(options: &Options) -> bool {
+    !options.summary_only
+}
+
 fn results_at(query: &EvaluatedQuery, threshold: f32) -> Vec<&ScoredDocument> {
     query
         .results
@@ -480,8 +538,15 @@ fn evaluate_at(queries: &[EvaluatedQuery], threshold: f32) -> Metrics {
     metrics
 }
 
-fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
-    println!("\nPer-query details at the current threshold ({threshold:.2})");
+fn write_baseline_details<W: Write>(
+    out: &mut W,
+    queries: &[EvaluatedQuery],
+    threshold: f32,
+) -> io::Result<()> {
+    writeln!(
+        out,
+        "\nPer-query details at the current threshold ({threshold:.2})"
+    )?;
 
     for query in queries {
         let returned = results_at(query, threshold);
@@ -530,7 +595,8 @@ fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
             "target-missed"
         };
 
-        println!(
+        writeln!(
+            out,
             "{} | {} | {} | query={:?} | returned={} | top={}",
             query.id,
             label,
@@ -542,8 +608,10 @@ fn print_baseline_details(queries: &[EvaluatedQuery], threshold: f32) {
             } else {
                 &top_results
             }
-        );
+        )?;
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -746,6 +814,137 @@ mod tests {
     fn unknown_options_are_rejected() {
         let error = Options::parse(args(&["--sweep"])).expect_err("unknown option");
         assert!(error.contains("unknown option"));
+    }
+
+    #[test]
+    fn default_arguments_keep_per_query_details_enabled() {
+        let options = Options::parse(Vec::new()).expect("default options");
+
+        // The exploratory sweep must keep printing per-query details.
+        assert!(!options.summary_only);
+    }
+
+    #[test]
+    fn baseline_only_without_summary_only_keeps_details() {
+        let options = Options::parse(args(&[
+            "--baseline-only",
+            "evaluation/relevance-corpus.json",
+        ]))
+        .expect("baseline-only options");
+
+        // Regression debugging relies on per-query output staying on by default.
+        assert!(options.baseline_only);
+        assert!(!options.summary_only);
+    }
+
+    #[test]
+    fn summary_only_combines_with_baseline_only_in_either_order() {
+        let flags_first = Options::parse(args(&[
+            "--summary-only",
+            "--baseline-only",
+            "evaluation/relevance-corpus.json",
+        ]))
+        .expect("summary-only after baseline-only");
+
+        let path_first = Options::parse(args(&[
+            "--baseline-only",
+            "evaluation/relevance-corpus.json",
+            "--summary-only",
+        ]))
+        .expect("summary-only before path");
+
+        for options in [flags_first, path_first] {
+            assert_eq!(
+                options.corpus_path,
+                PathBuf::from("evaluation/relevance-corpus.json")
+            );
+            assert!(options.baseline_only);
+            assert!(options.summary_only);
+            // The sweep guard must not be weakened by the new flag.
+            assert_eq!(
+                thresholds_for(options.baseline_only),
+                vec![BASELINE_THRESHOLD]
+            );
+        }
+    }
+
+    #[test]
+    fn summary_only_without_baseline_only_is_rejected() {
+        let error = Options::parse(args(&["--summary-only"])).expect_err("summary-only alone");
+        assert!(error.contains("--summary-only"));
+    }
+
+    #[test]
+    fn summary_only_with_a_corpus_path_is_rejected() {
+        let error = Options::parse(args(&[
+            "--summary-only",
+            "evaluation/relevance-corpus.json",
+        ]))
+        .expect_err("summary-only needs the baseline flag");
+
+        // A path still has to be paired with --baseline-only, with or without
+        // the summary-only flag.
+        assert!(error.contains("--baseline-only"));
+    }
+
+    #[test]
+    fn summary_only_renders_aggregate_table_without_per_query_details() {
+        let queries = vec![
+            evaluated_query("hit", &["target"], &[("target", 0.8), ("other", 0.6)]),
+            evaluated_query("neg", &[], &[("noise", 0.5)]),
+        ];
+
+        let sealed = Options::parse(args(&[
+            "--baseline-only",
+            "evaluation/sealed-corpus.json",
+            "--summary-only",
+        ]))
+        .expect("sealed options");
+
+        let debugging = Options::parse(args(&["--baseline-only", "evaluation/sealed-corpus.json"]))
+            .expect("debug options");
+
+        let render = |options: &Options| {
+            let mut buffer = Vec::new();
+            write_report(&mut buffer, &queries, options).expect("render report");
+            String::from_utf8(buffer).expect("report is valid utf-8")
+        };
+
+        let sealed_output = render(&sealed);
+        let debug_output = render(&debugging);
+
+        // The aggregate metrics table is emitted in both modes, with the same
+        // values: a label recall of 100.0% and an MRR of 1.000.
+        for output in [&sealed_output, &debug_output] {
+            assert!(output.contains("Threshold"));
+            assert!(output.contains("Recall@10"));
+            assert!(output.contains("Overall prec"));
+            assert!(output.contains("100.0%"));
+            assert!(output.contains("1.000"));
+        }
+
+        let table_rows = |output: &str| {
+            output
+                .lines()
+                .filter(|line| line.trim_start().starts_with("0.25"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(table_rows(&sealed_output).len(), 1);
+        assert_eq!(table_rows(&sealed_output), table_rows(&debug_output));
+
+        // Query text, per-query scores, ranks, and document titles appear
+        // only when summary-only is disabled.
+        assert!(debug_output.contains("Per-query details"));
+        assert!(debug_output.contains("query="));
+        assert!(debug_output.contains("rank=1"));
+        assert!(debug_output.contains("target title"));
+
+        assert!(!sealed_output.contains("Per-query details"));
+        assert!(!sealed_output.contains("query="));
+        assert!(!sealed_output.contains("rank="));
+        assert!(!sealed_output.contains("score="));
+        assert!(!sealed_output.contains("target title"));
     }
 
     #[test]

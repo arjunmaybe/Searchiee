@@ -38,6 +38,13 @@ $env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
 cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- --baseline-only evaluation\validation-corpus.json
 ```
 
+To suppress the per-query detail block, add `--summary-only`. It is only accepted next to `--baseline-only <corpus>`, and without it `--baseline-only <corpus>` continues to print per-query details for debugging. The flag removes query text, per-query scores, ranks, and document titles from the output while leaving the aggregate metrics table unchanged:
+
+```powershell
+$env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
+cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- --baseline-only evaluation\validation-corpus.json --summary-only
+```
+
 The first run downloads the local embedding model into the separate cache directory. Later runs reuse it. The evaluator uses Searchiee's existing local embedding function. Running with no arguments sweeps every candidate threshold on the exploratory corpus. Passing `--baseline-only <corpus>` instead measures that corpus solely at the fixed production threshold (0.25), so the sweep cannot be used to tune against a supplied corpus. A corpus path is only accepted together with `--baseline-only`; any other option is rejected. Production threshold behavior is never changed.
 
 ## Metric definitions
@@ -103,6 +110,84 @@ Observed by running the evaluator with `--baseline-only` against this corpus, wh
 
 The 24/24 query-hit rate does not mean every relevant document was retrieved (2 of 31 labels were missed), nor that the top-ranked result was always relevant (2 queries ranked a labelled target second). Separately, 37 non-target results were returned across positive queries. No threshold was selected or changed on the basis of these results; the exploratory sweep above stays separate from this baseline.
 
+## Sealed test corpus (not yet evaluated)
+
+`evaluation/sealed-corpus.json` is a third synthetic diagnostic corpus written after the development and validation corpora already existed. Its purpose is to characterize Searchiee at the fixed production threshold on topics that do not overlap either earlier corpus. It is intended as a disposable regression and smoke benchmark, not as a general quality estimate.
+
+- 24 synthetic documents across 8 topic clusters, 3 distinguishable documents per cluster.
+- 48 queries: 32 positive queries and 16 negative controls.
+- 40 individual relevance labels.
+- 24 single-label positives plus 8 positives that each carry exactly two relevance labels.
+- 8 hard/adjacent negative controls, one per cluster, plus 8 clear out-of-domain negative controls.
+
+The topics are archery, model railroading, rock climbing, soap making, leatherworking, amateur radio, bookbinding, and origami. Positive queries mix keyword fragments, conversational wording, low-overlap paraphrases, and a small number of realistic typos. Some clusters are deliberately adjacent in vocabulary (leatherworking and bookbinding overlap on stitching and sewing vocabulary, sharing words such as stitch, thread, sewing, and waxed; bookbinding and origami share paper vocabulary; model railroading and amateur radio reuse terms such as station and ground in different senses; archery and rock climbing share terms such as anchor, cam, energy, fall, shoulder, stance, and stable), which is treated as useful within-corpus retrieval stress while labels stay strict and content-based: a document is labelled relevant only when its own content answers or supports the query, never because the wording happens to overlap.
+
+### Disjointness from the earlier corpora
+
+Disjointness from the development corpus was machine-checked against `evaluation/relevance-corpus.json`: no sealed document title, document content, or query text duplicates a development entry. Duplicate comparison used exact string equality and, separately, a normalized form obtained by lowercasing, collapsing whitespace, and stripping every non-alphanumeric character. No sealed topic appears as a development document or query topic, including topics that occur only in the development negative controls (music practice, influenza, Roman aqueducts, compound interest, descaling, utility billing, pool chemistry, router quality of service, password reset, container shipping, personal loans, TLS cipher suites, sink drains, desalination, frozen pipes, operating-system password resets, firewalls, VPNs, gluten-free baking, croissant lamination, bread storage, hurricanes, index fossils, aurora, raised garden beds, broker-versus-advisor comparisons, and home-insurance appeals).
+
+`evaluation/validation-corpus.json` was **not** opened or machine-compared for this work. Disjointness from it rests only on its published topic summary in this README (beekeeping, bicycle repair, pottery, knitting, home coffee brewing, aquarium fishkeeping, amateur astronomy, and chess improvement, together with their listed negative-control topics). No machine comparison against that file was performed, and none is being claimed.
+
+### Label policy and bias
+
+The same label policy as the earlier corpora applies: a document is labelled relevant to a query only when its content meaningfully answers or supports that query, topic similarity or shared vocabulary alone is not enough, and ambiguous cases are avoided rather than guessed. Every document is the target of at least one positive query, and every label references an existing document ID.
+
+Topic separation reduces overlap with the earlier corpora but does not remove author bias. The labels are author-assigned, the author has already seen results from the earlier corpora, and each query was written with knowledge of the sealed documents. This corpus remains a synthetic diagnostic fixture, not an independently labelled benchmark.
+
+## Sealed test protocol (pre-registered before any run)
+
+This section is the acceptance protocol for the sealed corpus. The protocol, the corpus, and the evaluator safeguards are committed **before** any evaluation run so that the criteria cannot be chosen after seeing results.
+
+### Purpose and fixed threshold
+
+Characterize Searchiee at the fixed production threshold of **0.25** on a topic-disjoint corpus. This is a diagnostic and regression measurement only. It is not threshold selection, and no change to `0.25` is proposed or implied.
+
+### Metrics recorded
+
+The Milestone 2 evaluator reports, at the fixed threshold only: positive queries hit, label recall@10, MRR@10, non-target results on positive queries, positive precision, overall precision, negative queries with results, results on negative queries, and results per query. The definitions in the metric-definitions section apply unchanged.
+
+### Acceptance criteria
+
+There are **no pre-agreed search-quality pass/fail cutoffs**. No product requirement is invented here, and no threshold change is recommended. The run is a descriptive characterization: the aggregate metrics are recorded and interpreted afterwards, not scored against a gate. The only mandatory pass conditions are the objective corpus-integrity checks below.
+
+### Corpus-integrity checks (objective, verified before freezing)
+
+- The file parses as JSON against the evaluator's schema.
+- 24 documents, 48 queries, and 40 relevance labels.
+- 32 positive queries and 16 negative controls.
+- Exactly 8 positive queries carry exactly 2 labels; the remaining 24 positives carry exactly 1.
+- 3 documents and 4 positive queries per topic cluster, that is, 3 single-label positives plus 1 two-label positive.
+- 8 hard/adjacent negative controls, one per cluster, plus 8 clear out-of-domain controls.
+- Document IDs, query IDs, and normalized query texts are unique.
+- Every label references an existing document ID.
+- Every document is the target of at least one positive query.
+- No development-corpus document title, document content, or query text is reused.
+
+### Resolution of the negative controls
+
+Only 16 negative controls contribute to the negative-control metrics, so those figures are coarse and directional. Binomial uncertainty across 16 observations is large, and the numbers must not be read as precise general-quality estimates. The positive side, 32 queries carrying 40 labels, is likewise small enough to be a regression signal rather than a general benchmark.
+
+### One-look procedure
+
+- **The look versus execution attempts.** The corpus is authorized for exactly one look. An *execution attempt* is any run of the evaluator against `evaluation/sealed-corpus.json`. An attempt that fails **before** the aggregate metrics table begins printing reveals no results and may be retried without consuming the look. An execution attempt that reaches the aggregate metrics table consumes the look, whether it completes successfully or fails afterwards.
+- **Recorded after the fact.** The number of execution attempts, each attempt's outcome, and whether the look was consumed are recorded in the results section below only once they have actually happened. Nothing is pre-filled here: no attempt count, outcome, or date is asserted in advance.
+- **Consumption policy.** If the results motivate any change to labels, queries, corpus contents, or the production threshold, this corpus is consumed. A new independent corpus is required before another decision-grade evaluation, and the sealed corpus is not re-run to confirm a revision.
+- **Freeze metadata.** The SHA-256 digest of the frozen corpus file and the frozen commit reference are captured from actual pre-run values: the digest is computed from the committed `evaluation/sealed-corpus.json` once the freeze commit exists, and the commit reference is that freeze commit. The execution-attempt count, attempt outcomes, and the evaluation date stay unset until they actually occur. All of these are deliberately absent until each is real, so that no value in this README can be mistaken for a recorded one.
+- **Commit sequence.** The freeze commit contains the sealed corpus, the `--summary-only` evaluator change together with its tests, and this protocol section. After the freeze commit, and before the evaluation, the actual corpus SHA-256 digest and the frozen commit reference are recorded in a documentation-only change. After the authorized evaluation, the aggregate results together with the evaluation date, the execution-attempt count, and each attempt's outcome are recorded in a subsequent documentation-only change. Neither documentation-only change may modify `evaluation/sealed-corpus.json`, so the frozen digest remains valid.
+
+## Sealed test results (not yet run)
+
+**Status: not evaluated.** No run has been performed against `evaluation/sealed-corpus.json`. No aggregate metrics, digest, commit reference, evaluation date, or execution-attempt record exists yet.
+
+The run will be performed once, after the frozen commit is explicitly approved, with:
+
+```powershell
+$env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
+cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- --baseline-only evaluation\sealed-corpus.json --summary-only
+```
+
+The command above runs with `--summary-only`, so only the aggregate metrics table is emitted (see the Run section). After the freeze commit and before the attempt, this section will record the corpus SHA-256 digest and the frozen commit reference, both taken from actual pre-run values. After the authorized attempt, it will record the aggregate output together with the evaluation date, the number of execution attempts, and each attempt's outcome. No metadata is pre-filled.
+
 ## Limitations
 
-Both corpora are small synthetic diagnostic datasets, not independently validated benchmarks. The exploratory corpus now mixes single- and multi-label positives, but it still uses author-assigned labels and was itself used to compare thresholds, so its results do not establish general retrieval quality. The validation corpus (`validation-corpus.json`) has already been inspected once and is therefore a regression baseline rather than an untouched holdout; like the exploratory set it uses author-assigned synthetic labels, so its baseline is diagnostic rather than a general estimate of search quality. No production threshold decision should be made from either set alone; that would require representative real documents and queries with independent labelling.
+All three corpora are small synthetic diagnostic datasets, not independently validated benchmarks. The exploratory corpus now mixes single- and multi-label positives, but it still uses author-assigned labels and was itself used to compare thresholds, so its results do not establish general retrieval quality. The validation corpus (`validation-corpus.json`) has already been inspected once and is therefore a regression baseline rather than an untouched holdout; like the exploratory set it uses author-assigned synthetic labels, so its baseline is diagnostic rather than a general estimate of search quality. The sealed corpus (`sealed-corpus.json`) has not yet been evaluated and is topic-disjoint from the other two, but its labels are also author-assigned, so a future run would be a regression signal rather than a general estimate of search quality. No production threshold decision should be made from any of them alone; that would require representative real documents and queries with independent labelling.

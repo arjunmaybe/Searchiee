@@ -1,0 +1,366 @@
+{
+  "documents": [
+    {
+      "id": "s01",
+      "title": "Recurve bow basics",
+      "content": "A recurve bow stores energy in limbs that curve away from the archer at rest. Start with a stable stance, feet about shoulder-width apart, and draw using the back muscles rather than the drawing arm. Set a consistent anchor point against the face, keep the bow arm extended without locking the elbow, and stay steady through the release. A smooth follow-through, keeping the bow arm up until the arrow lands, stops the sight picture from dropping early."
+    },
+    {
+      "id": "s02",
+      "title": "Compound bow cams and let-off",
+      "content": "A compound bow uses eccentric cams to create a draw cycle that peaks in the middle and then falls off sharply. That reduction at full draw, called let-off, commonly falls between seventy and ninety percent, so the archer holds only a small fraction of the peak draw weight while aiming. Compounds are usually shot with a mechanical release aid, either wrist-strap or handheld, and a peep sight set into the string. Tuning one means setting cam timing, checking draw length, and adjusting tiller and rest position so the cams roll over evenly."
+    },
+    {
+      "id": "s03",
+      "title": "Arrow spine and rest tuning",
+      "content": "Arrow spine measures how stiff a shaft is, and the right spine depends on draw weight, draw length, and point weight. A shaft that is too stiff drifts away from the bow, while one that is too soft drifts toward it. Center the rest so the arrow sits near the bow's center shot, then adjust nock height and set the plunger button tension. Paper tuning and bare-shaft tuning reveal whether the arrow leaves the rest straight or cocked."
+    },
+    {
+      "id": "s04",
+      "title": "HO scale track planning",
+      "content": "An HO layout is built around curve radius, turnout numbers, and staging. Mainline curves of at least eighteen inches keep long locomotives and passenger cars on the rails, while tighter industrial spurs handle slower switching. Benchwork is the frame the track sits on, and staging tracks let trains wait off-scene so the railroad can run continuously. Plan turnout placement early, because every switch needs a control and a clear approach on both sides."
+    },
+    {
+      "id": "s05",
+      "title": "DCC command control",
+      "content": "Digital command control sends a constant track voltage with encoded packets so each decoder answers only to its own address. A command station drives the system, a booster supplies current, and the throttle sends speed and function commands over the rail. Decoders are configured through CVs, either directly or on a programming track, and functions such as lighting map to function keys. Consisting groups several locomotives under one address so a whole train can be run as a single unit."
+    },
+    {
+      "id": "s06",
+      "title": "Scenery and structure modeling",
+      "content": "Scenery starts with a landform, usually foam, plaster cloth, or carved insulation laid over the subroadbed. Static grass fibers stood on end give believable fields, and ground foam in several shades breaks up flat color. Structures such as buildings, bridges, and industry kits are weathered with chalk, thinned paint, and rust powders so they look used. Ballast is sifted between the ties and glued down with diluted white glue."
+    },
+    {
+      "id": "s07",
+      "title": "Indoor top-rope belaying",
+      "content": "Top-rope belaying in a gym means managing slack through a belay device while the rope runs up to an anchor and back down to the climber. Both partners perform a harness and knot check before leaving the ground, and the belayer keeps the brake hand on the rope at all times. Assisted-braking devices reduce the force needed to catch a fall, but the brake hand still controls the rope. Taking in slack steadily and keeping the rope from looping over a shoulder are the two habits most gyms drill first."
+    },
+    {
+      "id": "s08",
+      "title": "Traditional gear placement",
+      "content": "Traditional climbing places removable protection into cracks as the leader ascends. Active protection such as spring-loaded cams expands against the rock, while passive protection such as nuts and hexes wedges into constrictions. A rack is assembled by carrying a range of cam sizes and a set of nuts, and each piece is judged by how well it seats and the direction the pull will come from. Slings and quickdraws extend placements to reduce rope drag and stop pieces from walking deeper."
+    },
+    {
+      "id": "s09",
+      "title": "Lead climbing falls",
+      "content": "A lead fall is described by its fall factor, the length of the fall divided by the amount of rope out above the last piece of protection. A short fall with little rope paid out can generate more force than a longer fall on a full rope length, because the dynamic rope has less material available to stretch. Dynamic ropes absorb energy by elongating, which lowers the peak force on both the gear and the climber. Clipping from a stable stance and avoiding back-stepping keeps the rope running cleanly through the protection."
+    },
+    {
+      "id": "s10",
+      "title": "Cold process soap",
+      "content": "Cold process soap is made by mixing fixed oils with a lye solution so the oils saponify into soap and glycerin. Each oil contributes its own properties: olive oil makes a gentle, slow-curing bar, while harder oils add firmness and lather. Blends are brought to trace, the point where the mixture thickens enough to leave a trail on the surface, and then poured into a mold. The loaf is insulated, cut into bars the next day, and left to finish curing."
+    },
+    {
+      "id": "s11",
+      "title": "Lye safety and handling",
+      "content": "Lye is sodium hydroxide, a caustic that burns skin and eyes on contact, so it is weighed dry and added to water, never the reverse. Safety goggles, nitrile gloves, long sleeves, and a ventilated workspace are the minimum protection. Personal exposure and spill cleanup are two different situations. If dry solid lye contacts skin, clothing, or hair, immediately brush the visible solid material off while keeping the eyes protected, remove the contaminated clothing, and flush the exposed skin with running water for at least 15 minutes. Eye exposure calls for immediate irrigation with running water for at least 30 minutes, followed by urgent medical care. For spills on the work surface, cleanup follows the product safety data sheet: do not try to neutralize a sodium hydroxide spill with vinegar or another acid, because the reaction gives off heat and can spatter caustic liquid, and the acid creates a hazard of its own. The lye solution is mixed in a vessel that will never be used for food. Keep children and pets out of the area until the batch has been poured and the surfaces washed down."
+    },
+    {
+      "id": "s12",
+      "title": "Curing and additives",
+      "content": "Freshly cut soap needs to cure for four to six weeks while water evaporates and the bar hardens. Curing improves the lather and makes the bar last longer in the shower. Superfatting leaves a portion of the oil unsaponified so the bar is more conditioning, and essential oils or fragrance are stirred in at trace. Additives such as oatmeal, clays, and colorants go in in small amounts, and finished bars are stored somewhere dry with air circulation."
+    },
+    {
+      "id": "s13",
+      "title": "Vegetable tanned leather",
+      "content": "Vegetable tanned leather is preserved with tannins drawn from bark and other plant matter, which leaves a firm, pale hide that ages into a warm patina. Thickness is measured in ounces, with one ounce equal to about one sixty-fourth of an inch. Four to five ounce leather suits wallets and small goods, while eight to ten ounce carries belts and sheaths. A single hide varies in firmness along its length, so panels are cut with the stretch direction in mind."
+    },
+    {
+      "id": "s14",
+      "title": "Hand stitching",
+      "content": "Hand sewn leather is joined with a saddle stitch, in which two needles pass through the same hole from opposite sides. Because the stitch locks inside the hole, a broken thread does not unravel the whole seam. Holes are marked with pricking irons or a stitching chisel and opened before sewing, and the thread is waxed so it grips and still slides. A stitching pony clamps the work vertically and leaves both hands free to work the needles."
+    },
+    {
+      "id": "s15",
+      "title": "Edge finishing",
+      "content": "Cut leather edges are beveled to take off the square corner, then dampened and burnished with a slicker or a canvas cloth until the fibers compress into a smooth surface. Gum tragacanth or burnishing cream supplies the moisture and a little binder, and repeated passes produce a glossy edge. Edges can also be dyed before burnishing so the color matches the face of the piece. A light coat of wax or conditioner seals the finished edge."
+    },
+    {
+      "id": "s16",
+      "title": "HF wire antennas",
+      "content": "Most amateur HF stations begin with a wire antenna, commonly a half-wave dipole cut for the target band. Height above ground strongly shapes the radiation pattern, with higher placement lowering the takeoff angle for long-distance work. SWR indicates how well the antenna matches the feedline, and an antenna tuner can smooth a mismatch but cannot repair a badly cut wire. Keep feedline runs short and use coax suited to the frequency so loss stays low."
+    },
+    {
+      "id": "s17",
+      "title": "VHF and UHF repeaters",
+      "content": "VHF and UHF handhelds talk much farther through repeaters that receive on one frequency and retransmit on another. Each repeater has an output frequency, a transmit offset, and often a PL or CTCSS tone that the radio must send before the repeater will key up. Simplex operation, radio to radio on a single frequency, works over short distances and needs no tone. A better antenna and a little elevation usually help more than extra transmit power."
+    },
+    {
+      "id": "s18",
+      "title": "Licensing and call signs",
+      "content": "Amateur radio licenses are issued by the FCC after passing an exam drawn from a published question pool. The Technician, General, and Extra classes each add privileges, with the higher classes opening more bands and more power. Questions cover rules, operating practice, radio theory, and safety, and a passing score is sent to the FCC together with the new call sign. The call sign identifies the station on the air and must be transmitted at the start and end of a contact."
+    },
+    {
+      "id": "s19",
+      "title": "Pamphlet and coptic binding",
+      "content": "A pamphlet stitch binds a few folded sheets with a single length of thread through the fold line, which is the quickest way to make a small booklet. Coptic binding sews stacked signatures directly to one another with a chain stitch, leaving the spine exposed so the book opens flat. Both methods begin with folded signatures, and the sewing pattern decides how the finished spine looks. Waxed linen thread holds knots without slipping."
+    },
+    {
+      "id": "s20",
+      "title": "Case binding",
+      "content": "Case binding builds a separate hard cover, the case, and then attaches the sewn text block to it. Boards are cut slightly larger than the pages, wrapped in book cloth or paper, and joined with a spine piece that sets the hinge width. Endpapers are pasted to the boards and to the first and last pages to hinge the text block in. The case is pressed while the glue dries so the boards stay flat."
+    },
+    {
+      "id": "s21",
+      "title": "Paper grain and folding",
+      "content": "Paper has a grain, the direction the fibers lie, and folds run much cleaner with the grain than across it. A fold against the grain tends to crack along the fold line, especially on heavier stock, while a fold with the grain looks crisp. Grain direction is tested by tearing a small sample or by flexing the sheet and feeling which way it resists. Signatures are folded so that every sheet in the signature shares the same grain orientation."
+    },
+    {
+      "id": "s22",
+      "title": "Basic folds and the crane",
+      "content": "Origami begins with a small set of folds: the valley fold, the mountain fold, and the reverse fold. From the square base and the preliminary base come the bird base and the frog base, which are the starting points for most classic models. The crane is folded from a bird base, with four long points that become the neck, tail, and wings. Precision in the first few folds matters more than anything later, because errors compound as the model grows."
+    },
+    {
+      "id": "s23",
+      "title": "Modular origami",
+      "content": "Modular origami builds a larger structure from many identical folded units, each one a small sheet folded into a pocket-and-tab shape. A sonobe unit is a common choice, and six of them make a cube, while assemblies of about thirty units form more complex polyhedra such as an icosahedron. Units are assembled by sliding tabs into pockets, and friction alone holds most models together without glue. Consistent folding across every unit is what keeps the finished shape even."
+    },
+    {
+      "id": "s24",
+      "title": "Wet-folding and shaping",
+      "content": "Wet-folding softens paper fibers with a light mist of water so the sheet can be shaped into gentle curves instead of flat creases. Heavier, sized papers hold the curve once they dry, and the surface can be burnished with a fingernail or a bone folder. Curved models such as vessels and animals rely on shaping more than on precise folding. The paper must be damp rather than soaked, or the fibers will tear."
+    }
+  ],
+  "queries": [
+    {
+      "id": "tq01",
+      "text": "recurve draw anchor follow-through",
+      "relevant_document_ids": ["s01"]
+    },
+    {
+      "id": "tq02",
+      "text": "What makes a compound bow so much easier to hold at full draw?",
+      "relevant_document_ids": ["s02"]
+    },
+    {
+      "id": "tq03",
+      "text": "how stiff should my arrows be for my recurve",
+      "relevant_document_ids": ["s03"]
+    },
+    {
+      "id": "tq04",
+      "text": "How do I fit arrows and time the cams on a new compund bow?",
+      "relevant_document_ids": ["s02", "s03"]
+    },
+    {
+      "id": "tq05",
+      "text": "What curve radius do I need so my long locomotives don't derail on my HO layout?",
+      "relevant_document_ids": ["s04"]
+    },
+    {
+      "id": "tq06",
+      "text": "DCC decoder CV programming consist address",
+      "relevant_document_ids": ["s05"]
+    },
+    {
+      "id": "tq07",
+      "text": "How do I make plastic hills and buildings look realistic?",
+      "relevant_document_ids": ["s06"]
+    },
+    {
+      "id": "tq08",
+      "text": "How do I plan track curves on a small HO layout and make the scenery around them look realistic?",
+      "relevant_document_ids": ["s04", "s06"]
+    },
+    {
+      "id": "tq09",
+      "text": "gym top rope belay device partner check",
+      "relevant_document_ids": ["s07"]
+    },
+    {
+      "id": "tq10",
+      "text": "Which pieces of gear should I rack first for a traditional route?",
+      "relevant_document_ids": ["s08"]
+    },
+    {
+      "id": "tq11",
+      "text": "How much force does a climber feel when a fall gets longer?",
+      "relevant_document_ids": ["s09"]
+    },
+    {
+      "id": "tq12",
+      "text": "How do I keep a climber safe whether the climb is top-rope or a lead fall?",
+      "relevant_document_ids": ["s07", "s09"]
+    },
+    {
+      "id": "tq13",
+      "text": "What happens chemically when I mix oils and lye to make soap?",
+      "relevant_document_ids": ["s10"]
+    },
+    {
+      "id": "tq14",
+      "text": "lye safety goggles gloves ventilation",
+      "relevant_document_ids": ["s11"]
+    },
+    {
+      "id": "tq15",
+      "text": "How long should a soap bar sit before I use it?",
+      "relevant_document_ids": ["s12"]
+    },
+    {
+      "id": "tq16",
+      "text": "How do I know when my batch has thickened enough to pour, and how long before the bars are ready?",
+      "relevant_document_ids": ["s10", "s12"]
+    },
+    {
+      "id": "tq17",
+      "text": "vegetable tanned leather weight ounces selection",
+      "relevant_document_ids": ["s13"]
+    },
+    {
+      "id": "tq18",
+      "text": "What's the best way to hand-sew a belt so the stitching doesn't unravel?",
+      "relevant_document_ids": ["s14"]
+    },
+    {
+      "id": "tq19",
+      "text": "How do I make the cut edgess of a leather strap smooth and glossy?",
+      "relevant_document_ids": ["s15"]
+    },
+    {
+      "id": "tq20",
+      "text": "Which tools do I need to finish a hand-stitched leather wallet?",
+      "relevant_document_ids": ["s14", "s15"]
+    },
+    {
+      "id": "tq21",
+      "text": "HF dipole SWR antenna tuner",
+      "relevant_document_ids": ["s16"]
+    },
+    {
+      "id": "tq22",
+      "text": "How do I program my handheld to reach a repeater across town?",
+      "relevant_document_ids": ["s17"]
+    },
+    {
+      "id": "tq23",
+      "text": "What do I have to pass before the FCC issues me a callsign?",
+      "relevant_document_ids": ["s18"]
+    },
+    {
+      "id": "tq24",
+      "text": "What antenna and band should I use to talk locally and farther away?",
+      "relevant_document_ids": ["s16", "s17"]
+    },
+    {
+      "id": "tq25",
+      "text": "pamphlet stitch coptic sewing signatures",
+      "relevant_document_ids": ["s19"]
+    },
+    {
+      "id": "tq26",
+      "text": "How do I make a proper hardcover with boards and cloth?",
+      "relevant_document_ids": ["s20"]
+    },
+    {
+      "id": "tq27",
+      "text": "Why do my folded pages crack along the fold?",
+      "relevant_document_ids": ["s21"]
+    },
+    {
+      "id": "tq28",
+      "text": "How do I sew the text block before casing it into a hard cover?",
+      "relevant_document_ids": ["s19", "s20"]
+    },
+    {
+      "id": "tq29",
+      "text": "crane bird base valley mountain folds",
+      "relevant_document_ids": ["s22"]
+    },
+    {
+      "id": "tq30",
+      "text": "How do I build a model from lots of identical paper units?",
+      "relevant_document_ids": ["s23"]
+    },
+    {
+      "id": "tq31",
+      "text": "How do I shape paper so it holds a curv instead of a crease?",
+      "relevant_document_ids": ["s24"]
+    },
+    {
+      "id": "tq32",
+      "text": "Which folds and repeated units should I learn to move past single-sheet models?",
+      "relevant_document_ids": ["s22", "s23"]
+    },
+    {
+      "id": "tq33",
+      "text": "How much does a hunting crossbow weigh with a scope mounted?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq34",
+      "text": "Where can I buy a discontinued brass locomotive from the 1970s?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq35",
+      "text": "What gym membership plans include lead climbing certification?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq36",
+      "text": "How do I make a vegan melt-and-pour soap base from scratch?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq37",
+      "text": "How do I repair a broken zipper on a leather jacket?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq38",
+      "text": "How do I contact the International Space Station on the radio?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq39",
+      "text": "How do I repair a water-damaged antique book at home?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq40",
+      "text": "How do I fold a paper airplane that flies the farthest?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq41",
+      "text": "How do I write a Python function that reads a CSV file?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq42",
+      "text": "What is the capital city of Mongolia?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq43",
+      "text": "How do I train a dog to shake paws?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq44",
+      "text": "How do aircraft jet engines produce thrust?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq45",
+      "text": "How do I calculate the area of a trapezoid?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq46",
+      "text": "How do I choose a paint color for a bedroom?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq47",
+      "text": "How do I change a car's air filter?",
+      "relevant_document_ids": []
+    },
+    {
+      "id": "tq48",
+      "text": "How do I write a haiku about spring?",
+      "relevant_document_ids": []
+    }
+  ]
+}
