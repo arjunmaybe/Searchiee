@@ -110,7 +110,7 @@ Observed by running the evaluator with `--baseline-only` against this corpus, wh
 
 The 24/24 query-hit rate does not mean every relevant document was retrieved (2 of 31 labels were missed), nor that the top-ranked result was always relevant (2 queries ranked a labelled target second). Separately, 37 non-target results were returned across positive queries. No threshold was selected or changed on the basis of these results; the exploratory sweep above stays separate from this baseline.
 
-## Sealed test corpus (not yet evaluated)
+## Sealed test corpus
 
 `evaluation/sealed-corpus.json` is a third synthetic diagnostic corpus written after the development and validation corpora already existed. Its purpose is to characterize Searchiee at the fixed production threshold on topics that do not overlap either earlier corpus. It is intended as a disposable regression and smoke benchmark, not as a general quality estimate.
 
@@ -175,26 +175,43 @@ Only 16 negative controls contribute to the negative-control metrics, so those f
 - **Freeze metadata.** The SHA-256 digest of the frozen corpus file and the frozen commit reference are captured from actual pre-run values: the digest is computed from the committed `evaluation/sealed-corpus.json` once the freeze commit exists, and the commit reference is that freeze commit. Both are now recorded from actual values in the results section below. The execution-attempt count, attempt outcomes, and the evaluation date stay unset until they actually occur, so that no post-run value can be mistaken for a recorded one.
 - **Commit sequence.** The freeze commit contains the sealed corpus, the `--summary-only` evaluator change together with its tests, and this protocol section. After the freeze commit, and before the evaluation, the actual corpus SHA-256 digest and the frozen commit reference are recorded in a documentation-only change. After the authorized evaluation, the aggregate results together with the evaluation date, the execution-attempt count, and each attempt's outcome are recorded in a subsequent documentation-only change. Neither documentation-only change may modify `evaluation/sealed-corpus.json`, so the frozen digest remains valid.
 
-## Sealed test results (not yet run)
+## Sealed test results
 
-**Status: NOT YET RUN.** No run has been performed against `evaluation/sealed-corpus.json`. The pre-run metadata is recorded below; no aggregate metrics, evaluation date, execution-attempt count, or attempt outcome exists yet.
+**Status: evaluated once on 2026-10-18; the look is consumed.** One execution attempt was made against `evaluation/sealed-corpus.json`. It completed successfully, the aggregate metrics table was emitted in full, and this corpus will not be run again.
 
 Pre-run metadata, captured from actual values after the freeze commit and before any attempt:
 
 - **Frozen corpus and evaluator safeguards commit:** `76b56952dc18c6516a7e88e494a5934826cb9736`. This reference identifies the frozen `evaluation/sealed-corpus.json` together with the `--summary-only` evaluator safeguards and their tests, and this pre-registered protocol.
 - **Sealed corpus SHA-256:** `9279B792761A0D0F37E23EACC129964D55BC5FC75D2D207B735E7098502845C2`, computed from the committed `evaluation/sealed-corpus.json` at that commit.
 
-These are pre-run values: they fix which corpus and code the authorized run will use. They are deliberately separate from the post-run records, so the evaluation date, the number of execution attempts, and each attempt's outcome remain unset until the authorized attempt actually happens.
+These pre-run values fixed which corpus and code the authorized run used, and both remain valid because the frozen corpus was not modified before or after the attempt.
 
-The run will be performed once, after the frozen commit is explicitly approved, with:
+The authorized run was executed once, with:
 
 ```powershell
 $env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
 cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- --baseline-only evaluation\sealed-corpus.json --summary-only
 ```
 
-The command above runs with `--summary-only`, so only the aggregate metrics table is emitted (see the Run section). After the authorized attempt, this section will record the aggregate output together with the evaluation date, the number of execution attempts, and each attempt's outcome. No post-run metadata is pre-filled.
+### Post-run record (actual values, recorded after the fact)
+
+- **Evaluation date:** 2026-10-18, machine local time (UTC+05:30). The attempt ran from 14:08:18 to 14:08:51 local time.
+- **Execution attempts:** 1. Attempt 1 compiled and completed successfully with exit code 0, emitting the aggregate metrics table in full. No retry was needed, and none was performed.
+- **Look consumed:** yes. The aggregate metrics table was reached and completed on the first attempt, so this corpus is consumed under the one-look rule and has not been re-run for any reason.
+- **Execution failures or limitations:** no execution failure occurred; the run completed on the first attempt using the separate embedding cache directory. By protocol the run used `--summary-only`, so no per-query details (query text, per-query scores, ranks, or document titles) were emitted, and none are recorded here. The corpus remains a small synthetic corpus with author-assigned relevance labels, so these results are diagnostic evidence, not a general relevance benchmark.
+
+Aggregate output, recorded verbatim as emitted (embedding progress counters `Documents: n/24` and `Queries: n/48`, the model-loading line, and the `cargo run` compile banner are omitted; they precede and carry no results):
+
+```
+Corpus: 24 documents, 48 queries
+
+Supplied corpus: evaluated only at the fixed production threshold (0.25); the threshold sweep is reserved for the exploratory corpus.
+Threshold   Pos hit  Recall@10   MRR@10   Pos FP    Pos prec  Overall prec   Neg hit  Neg results  Avg/query
+     0.25     32/32     100.0%    0.984       78       33.9%         28.4%      7/16           23       2.94
+
+Evaluation note: this is a small synthetic corpus with author-assigned relevance labels. Treat the results as diagnostic evidence, not a general relevance benchmark.
+```
 
 ## Limitations
 
-All three corpora are small synthetic diagnostic datasets, not independently validated benchmarks. The exploratory corpus now mixes single- and multi-label positives, but it still uses author-assigned labels and was itself used to compare thresholds, so its results do not establish general retrieval quality. The validation corpus (`validation-corpus.json`) has already been inspected once and is therefore a regression baseline rather than an untouched holdout; like the exploratory set it uses author-assigned synthetic labels, so its baseline is diagnostic rather than a general estimate of search quality. The sealed corpus (`sealed-corpus.json`) has not yet been evaluated and is topic-disjoint from the other two, but its labels are also author-assigned, so a future run would be a regression signal rather than a general estimate of search quality. No production threshold decision should be made from any of them alone; that would require representative real documents and queries with independent labelling.
+All three corpora are small synthetic diagnostic datasets, not independently validated benchmarks. The exploratory corpus now mixes single- and multi-label positives, but it still uses author-assigned labels and was itself used to compare thresholds, so its results do not establish general retrieval quality. The validation corpus (`validation-corpus.json`) has already been inspected once and is therefore a regression baseline rather than an untouched holdout; like the exploratory set it uses author-assigned synthetic labels, so its baseline is diagnostic rather than a general estimate of search quality. The sealed corpus (`sealed-corpus.json`) has now been evaluated once, at the fixed production threshold on 2026-10-18, and is consumed under the one-look protocol: it will not be run again. Its results are diagnostic rather than general because the corpus is small, synthetic, and uses author-assigned relevance labels; it is topic-disjoint from the other two corpora, with disjointness from the validation corpus (`validation-corpus.json`) resting only on the topic summary published in this README, since that file was never opened or machine-compared. That single run does not by itself justify changing the production threshold of 0.25. No production threshold decision should be made from any of them alone; that would require representative real documents and queries with independent labelling.
