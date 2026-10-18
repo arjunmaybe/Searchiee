@@ -32,3 +32,22 @@ pub async fn embed_text(text: &str) -> Result<Vec<f32>, Box<dyn std::error::Erro
     let embeddings = model.embed(vec![text], None)?;
     Ok(embeddings.into_iter().next().unwrap())
 }
+
+/// Chunk texts per embedding call. 32 balances throughput against peak
+/// CPU memory: the dominant cost is transformer activations, which grow
+/// with batch × sequence length, while one failing batch aborts the whole
+/// indexing pass. fastembed's own default is 256.
+pub const EMBED_BATCH_SIZE: usize = 32;
+
+/// Embed several texts in one call, preserving order exactly: output `i`
+/// belongs to input `i`. Used only by the indexing pipeline; query
+/// embedding keeps using `embed_text`.
+pub async fn embed_texts(
+    texts: Vec<String>,
+) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+    let mut model = get_model()
+        .lock()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let embeddings = model.embed(texts, Some(EMBED_BATCH_SIZE))?;
+    Ok(embeddings)
+}

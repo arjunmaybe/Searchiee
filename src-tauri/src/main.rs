@@ -1,6 +1,7 @@
 // Entry point. Wires the file watcher, embedding pipeline, and vector
 // store together, and exposes a couple of commands to the frontend.
 
+mod chunk;
 mod embed;
 mod store;
 mod watcher;
@@ -118,15 +119,38 @@ async fn run_index_pipeline(
             scan.root.display()
         ));
     }
-    let mut staged: Vec<store::StagedDoc> = Vec::with_capacity(scan.docs.len());
-    for doc in scan.docs {
-        let vector = embed::embed_text(&doc.content).await.map_err(|e| e.to_string())?;
-        staged.push(store::StagedDoc {
-            path: doc.path,
-            content: doc.content,
-            vector,
-        });
+    // Plan chunks for every document (pure; no model calls).
+    let docs: Vec<(String, String)> = scan
+        .docs
+        .into_iter()
+        .map(|doc| (doc.path, doc.content))
+        .collect();
+    let ranges = plan_chunk_ranges(&docs);
+    let owners = chunk_owners(&ranges);
+
+    // Embed every chunk in bounded batches. A single failing batch aborts
+    // the whole pass here, before `staged` exists and before the store is
+    // touched, so no folder — related or unrelated — is modified.
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(owners.len());
+    for batch in owners.chunks(embed::EMBED_BATCH_SIZE) {
+        let texts: Vec<String> = batch
+            .iter()
+            .map(|&(doc_index, range_index)| {
+                chunk::chunk_text(&docs[doc_index].1, &ranges[doc_index][range_index]).to_string()
+            })
+            .collect();
+        let mut embedded = embed::embed_texts(texts).await.map_err(|e| e.to_string())?;
+        if embedded.len() != batch.len() {
+            return Err(format!(
+                "embedding model returned {} vectors for {} chunk texts",
+                embedded.len(),
+                batch.len()
+            ));
+        }
+        vectors.append(&mut embedded);
     }
+
+    let staged = assemble_staged(docs, ranges, vectors)?;
     let staged_len = staged.len();
 
     // Serialize saves through `save_lock` so concurrent index passes
@@ -165,6 +189,68 @@ async fn run_index_pipeline(
             "Indexed {staged_len} files in memory, but saving the persistent index failed: {e}. Results will work until the app restarts."
         )),
     }
+}
+
+/// One ordered list of chunk byte-ranges per document. Pure and
+/// deterministic; empty content yields an empty list.
+fn plan_chunk_ranges(docs: &[(String, String)]) -> Vec<Vec<chunk::Chunk>> {
+    docs.iter()
+        .map(|(_, content)| chunk::chunk_content(content))
+        .collect()
+}
+
+/// Flattened `(document index, range index)` owners, in document order,
+/// describing which chunk each embedding position belongs to.
+fn chunk_owners(ranges: &[Vec<chunk::Chunk>]) -> Vec<(usize, usize)> {
+    let mut owners = Vec::new();
+    for (doc_index, doc_ranges) in ranges.iter().enumerate() {
+        for range_index in 0..doc_ranges.len() {
+            owners.push((doc_index, range_index));
+        }
+    }
+    owners
+}
+
+/// Pair each chunk's byte range with its embedding, preserving the exact
+/// UTF-8 offsets produced by the chunker. A zero-length document has no
+/// ranges and no embeddings and stages as an empty, counted-but-not-
+/// searchable entry. A vector-count mismatch is rejected rather than
+/// misaligning offsets.
+fn assemble_staged(
+    docs: Vec<(String, String)>,
+    ranges: Vec<Vec<chunk::Chunk>>,
+    vectors: Vec<Vec<f32>>,
+) -> Result<Vec<store::StagedDoc>, String> {
+    let expected: usize = ranges.iter().map(|r| r.len()).sum();
+    if vectors.len() != expected {
+        return Err(format!(
+            "internal error: {} chunk embeddings for {} chunks",
+            vectors.len(),
+            expected
+        ));
+    }
+    let mut vectors = vectors.into_iter();
+    let mut staged = Vec::with_capacity(docs.len());
+    for ((path, content), doc_ranges) in docs.into_iter().zip(ranges) {
+        let mut chunks = Vec::with_capacity(doc_ranges.len());
+        for range in doc_ranges {
+            let vector = vectors
+                .next()
+                .ok_or_else(|| format!("internal error: missing chunk embedding for {path}"))?;
+            chunks.push(store::StoredChunk {
+                start: range.start,
+                end: range.end,
+                vector,
+            });
+        }
+        staged.push(store::StagedDoc {
+            path,
+            content,
+            vector: Vec::new(),
+            chunks,
+        });
+    }
+    Ok(staged)
 }
 
 #[tauri::command]
@@ -341,5 +427,166 @@ mod tests {
     fn rejects_paths_without_parent_structure() {
         assert_eq!(legacy_index_path(Path::new("index-v1.json")), None);
         assert_eq!(legacy_index_path(Path::new("D:\\index-v1.json")), None);
+    }
+
+    /// Deterministic stand-in for a real embedding so unit tests never
+    /// load or call the model.
+    fn fake_vector() -> Vec<f32> {
+        vec![1.0; store::INDEX_DIM]
+    }
+
+    /// Distinct, finite `INDEX_DIM` marker for one `(document, chunk)`
+    /// owner, so a test can trace each assembled chunk back to the exact
+    /// owner whose text it was embedded from.
+    fn marker_vector(doc_index: usize, chunk_index: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; store::INDEX_DIM];
+        vector[0] = 1.0;
+        vector[1] = (doc_index + 1) as f32;
+        vector[2] = (chunk_index + 1) as f32;
+        vector
+    }
+
+    #[test]
+    fn empty_content_stages_no_chunks() {
+        let docs = vec![(r"D:\Docs\empty.txt".to_string(), String::new())];
+        let ranges = plan_chunk_ranges(&docs);
+        assert!(ranges[0].is_empty());
+        let staged = assemble_staged(docs, ranges, Vec::new()).expect("assemble");
+        assert_eq!(staged.len(), 1);
+        assert!(staged[0].vector.is_empty());
+        assert!(staged[0].chunks.is_empty());
+    }
+
+    #[test]
+    fn chunk_offsets_match_content_and_chunker() {
+        let content = format!("{}\n\n{}", "A".repeat(500), "B".repeat(1500));
+        let docs = vec![(r"D:\Docs\a.txt".to_string(), content.clone())];
+        let ranges = plan_chunk_ranges(&docs);
+        let owners = chunk_owners(&ranges);
+        let vectors = vec![fake_vector(); owners.len()];
+        let staged = assemble_staged(docs, ranges.clone(), vectors).expect("assemble");
+
+        let doc = &staged[0];
+        assert!(doc.vector.is_empty());
+        assert!(doc.chunks.len() > 1);
+        assert_eq!(doc.chunks.len(), ranges[0].len());
+        for (chunk, range) in doc.chunks.iter().zip(&ranges[0]) {
+            assert_eq!(chunk.start, range.start);
+            assert_eq!(chunk.end, range.end);
+            assert!(content.is_char_boundary(chunk.start));
+            assert!(content.is_char_boundary(chunk.end));
+            assert_eq!(
+                &content[chunk.start..chunk.end],
+                chunk::chunk_text(&content, range)
+            );
+        }
+        assert_eq!(doc.chunks[0].start, 0);
+        assert_eq!(doc.chunks.last().unwrap().end, content.len());
+    }
+
+    #[test]
+    fn incorrect_embedding_counts_are_rejected() {
+        let docs = vec![(r"D:\Docs\a.txt".to_string(), "hello world".to_string())];
+        let ranges = plan_chunk_ranges(&docs);
+        assert_eq!(ranges[0].len(), 1);
+        let err = assemble_staged(docs, ranges, Vec::new())
+            .err()
+            .expect("expected a count mismatch error");
+        assert!(err.contains("chunk embeddings"));
+    }
+
+    #[test]
+    fn chunk_ownership_is_complete_across_batches() {
+        // 40 single-chunk documents -> 40 owners, split into two batches at 32.
+        let docs: Vec<(String, String)> = (0..40)
+            .map(|i| (format!(r"D:\Docs\{i}.txt"), format!("doc {i}")))
+            .collect();
+        let ranges = plan_chunk_ranges(&docs);
+        let owners = chunk_owners(&ranges);
+        assert_eq!(owners.len(), 40);
+        assert_eq!(owners.chunks(embed::EMBED_BATCH_SIZE).count(), 2);
+        // Every position maps back to exactly one (doc, range) pair.
+        for (position, &(doc_index, range_index)) in owners.iter().enumerate() {
+            assert_eq!(doc_index, position);
+            assert_eq!(range_index, 0);
+        }
+    }
+
+    #[test]
+    fn chunk_markers_survive_a_batch_boundary_across_documents() {
+        // The first document is long enough to span more than one
+        // embedding batch, so the batch boundary at owner position
+        // EMBED_BATCH_SIZE falls inside its chunk list rather than
+        // aligning with a document edge. The second document is a short
+        // tail that begins mid-batch.
+        let docs = vec![
+            (r"D:\Docs\long.txt".to_string(), "x".repeat(25_000)),
+            (r"D:\Docs\short.txt".to_string(), "second document".to_string()),
+        ];
+        let ranges = plan_chunk_ranges(&docs);
+        assert!(ranges[0].len() > embed::EMBED_BATCH_SIZE);
+        assert_eq!(ranges[1].len(), 1);
+
+        let owners = chunk_owners(&ranges);
+        assert_eq!(owners.len(), ranges[0].len() + ranges[1].len());
+        // The boundary position belongs to the first document.
+        assert!(embed::EMBED_BATCH_SIZE < ranges[0].len());
+        assert_eq!(owners[embed::EMBED_BATCH_SIZE], (0, embed::EMBED_BATCH_SIZE));
+
+        // Assign a distinct marker per (document, chunk) in owner order,
+        // feeding them through the same bounded batching the pipeline
+        // uses, without loading the model.
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(owners.len());
+        for batch in owners.chunks(embed::EMBED_BATCH_SIZE) {
+            for &(doc_index, chunk_index) in batch {
+                vectors.push(marker_vector(doc_index, chunk_index));
+            }
+        }
+        assert_eq!(vectors.len(), owners.len());
+
+        let staged = assemble_staged(docs, ranges.clone(), vectors).expect("assemble");
+        assert_eq!(staged.len(), 2);
+        for (doc_index, doc) in staged.iter().enumerate() {
+            assert_eq!(doc.chunks.len(), ranges[doc_index].len());
+            for (chunk_index, chunk) in doc.chunks.iter().enumerate() {
+                assert_eq!(chunk.vector, marker_vector(doc_index, chunk_index));
+                assert_eq!(chunk.start, ranges[doc_index][chunk_index].start);
+                assert_eq!(chunk.end, ranges[doc_index][chunk_index].end);
+            }
+        }
+    }
+
+    #[test]
+    fn staged_chunks_reconcile_and_are_searchable_above_threshold() {
+        let content = format!("{}\n\n{}", "A".repeat(500), "B".repeat(1500));
+        let docs = vec![(r"D:\Docs\a.txt".to_string(), content)];
+        let ranges = plan_chunk_ranges(&docs);
+        let owners = chunk_owners(&ranges);
+        let vectors = vec![fake_vector(); owners.len()];
+        let staged = assemble_staged(docs, ranges, vectors).expect("assemble");
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(&PathBuf::from(r"D:\Docs"), r"D:\Docs", staged)
+            .expect("reconcile");
+        assert_eq!(store.entry_count(), 1);
+        // Unit query vs unit chunk vectors scores 1.0, above the 0.25 floor.
+        let hits = store.search(&fake_vector(), 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, r"D:\Docs\a.txt");
+    }
+
+    #[test]
+    fn empty_documents_remain_counted_but_not_searchable() {
+        let docs = vec![(r"D:\Docs\empty.txt".to_string(), String::new())];
+        let ranges = plan_chunk_ranges(&docs);
+        let staged = assemble_staged(docs, ranges, Vec::new()).expect("assemble");
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(&PathBuf::from(r"D:\Docs"), r"D:\Docs", staged)
+            .expect("reconcile");
+        assert_eq!(store.entry_count(), 1);
+        assert!(store.search(&fake_vector(), 10).is_empty());
     }
 }
