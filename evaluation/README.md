@@ -172,12 +172,19 @@ Only 16 negative controls contribute to the negative-control metrics, so those f
 - **The look versus execution attempts.** The corpus is authorized for exactly one look. An *execution attempt* is any run of the evaluator against `evaluation/sealed-corpus.json`. An attempt that fails **before** the aggregate metrics table begins printing reveals no results and may be retried without consuming the look. An execution attempt that reaches the aggregate metrics table consumes the look, whether it completes successfully or fails afterwards.
 - **Recorded after the fact.** The number of execution attempts, each attempt's outcome, and whether the look was consumed are recorded in the results section below only once they have actually happened. Nothing is pre-filled here: no attempt count, outcome, or date is asserted in advance.
 - **Consumption policy.** If the results motivate any change to labels, queries, corpus contents, or the production threshold, this corpus is consumed. A new independent corpus is required before another decision-grade evaluation, and the sealed corpus is not re-run to confirm a revision.
-- **Freeze metadata.** The SHA-256 digest of the frozen corpus file and the frozen commit reference are captured from actual pre-run values: the digest is computed from the committed `evaluation/sealed-corpus.json` once the freeze commit exists, and the commit reference is that freeze commit. The execution-attempt count, attempt outcomes, and the evaluation date stay unset until they actually occur. All of these are deliberately absent until each is real, so that no value in this README can be mistaken for a recorded one.
+- **Freeze metadata.** The SHA-256 digest of the frozen corpus file and the frozen commit reference are captured from actual pre-run values: the digest is computed from the committed `evaluation/sealed-corpus.json` once the freeze commit exists, and the commit reference is that freeze commit. Both are now recorded from actual values in the results section below. The execution-attempt count, attempt outcomes, and the evaluation date stay unset until they actually occur, so that no post-run value can be mistaken for a recorded one.
 - **Commit sequence.** The freeze commit contains the sealed corpus, the `--summary-only` evaluator change together with its tests, and this protocol section. After the freeze commit, and before the evaluation, the actual corpus SHA-256 digest and the frozen commit reference are recorded in a documentation-only change. After the authorized evaluation, the aggregate results together with the evaluation date, the execution-attempt count, and each attempt's outcome are recorded in a subsequent documentation-only change. Neither documentation-only change may modify `evaluation/sealed-corpus.json`, so the frozen digest remains valid.
 
 ## Sealed test results (not yet run)
 
-**Status: not evaluated.** No run has been performed against `evaluation/sealed-corpus.json`. No aggregate metrics, digest, commit reference, evaluation date, or execution-attempt record exists yet.
+**Status: NOT YET RUN.** No run has been performed against `evaluation/sealed-corpus.json`. The pre-run metadata is recorded below; no aggregate metrics, evaluation date, execution-attempt count, or attempt outcome exists yet.
+
+Pre-run metadata, captured from actual values after the freeze commit and before any attempt:
+
+- **Frozen corpus and evaluator safeguards commit:** `76b56952dc18c6516a7e88e494a5934826cb9736`. This reference identifies the frozen `evaluation/sealed-corpus.json` together with the `--summary-only` evaluator safeguards and their tests, and this pre-registered protocol.
+- **Sealed corpus SHA-256:** `9279B792761A0D0F37E23EACC129964D55BC5FC75D2D207B735E7098502845C2`, computed from the committed `evaluation/sealed-corpus.json` at that commit.
+
+These are pre-run values: they fix which corpus and code the authorized run will use. They are deliberately separate from the post-run records, so the evaluation date, the number of execution attempts, and each attempt's outcome remain unset until the authorized attempt actually happens.
 
 The run will be performed once, after the frozen commit is explicitly approved, with:
 
@@ -186,7 +193,7 @@ $env:FASTEMBED_CACHE_DIR = "D:\Searchiee-eval-fastembed-cache"
 cargo run --manifest-path .\src-tauri\Cargo.toml --example evaluate_relevance -- --baseline-only evaluation\sealed-corpus.json --summary-only
 ```
 
-The command above runs with `--summary-only`, so only the aggregate metrics table is emitted (see the Run section). After the freeze commit and before the attempt, this section will record the corpus SHA-256 digest and the frozen commit reference, both taken from actual pre-run values. After the authorized attempt, it will record the aggregate output together with the evaluation date, the number of execution attempts, and each attempt's outcome. No metadata is pre-filled.
+The command above runs with `--summary-only`, so only the aggregate metrics table is emitted (see the Run section). After the authorized attempt, this section will record the aggregate output together with the evaluation date, the number of execution attempts, and each attempt's outcome. No post-run metadata is pre-filled.
 
 ## Limitations
 
