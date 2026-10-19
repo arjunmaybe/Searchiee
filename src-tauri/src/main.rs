@@ -119,13 +119,25 @@ async fn run_index_pipeline(
             scan.root.display()
         ));
     }
-    // Plan chunks for every document (pure; no model calls).
+    // Plan chunks for every document. Sizing is token-based: the budget
+    // comes from the embedding model's own tokenizer, so no chunk can be
+    // silently truncated. The model is only touched (and downloaded) if
+    // there is text to chunk; an empty scan needs no model.
     let docs: Vec<(String, String)> = scan
         .docs
         .into_iter()
         .map(|doc| (doc.path, doc.content))
         .collect();
-    let ranges = plan_chunk_ranges(&docs);
+    let ranges = {
+        let budget = embed::EmbeddingTokenBudget::new();
+        // Only prepare (and therefore touch the model) when some document
+        // actually has text; `chunk_content` never consults the budget for
+        // empty content, so an all-empty scan stays model-free.
+        if docs.iter().any(|(_, content)| !content.is_empty()) {
+            budget.prepare()?;
+        }
+        plan_chunk_ranges(&docs, &budget).map_err(|e| e.to_string())?
+    };
     let owners = chunk_owners(&ranges);
 
     // Embed every chunk in bounded batches. A single failing batch aborts
@@ -191,11 +203,15 @@ async fn run_index_pipeline(
     }
 }
 
-/// One ordered list of chunk byte-ranges per document. Pure and
-/// deterministic; empty content yields an empty list.
-fn plan_chunk_ranges(docs: &[(String, String)]) -> Vec<Vec<chunk::Chunk>> {
+/// One ordered list of chunk byte-ranges per document. Deterministic
+/// given `budget`; empty content yields an empty list. Fails only if the
+/// budget cannot hold even a single character of some document.
+fn plan_chunk_ranges(
+    docs: &[(String, String)],
+    budget: &dyn chunk::TokenBudget,
+) -> Result<Vec<Vec<chunk::Chunk>>, chunk::TokenBudgetTooSmall> {
     docs.iter()
-        .map(|(_, content)| chunk::chunk_content(content))
+        .map(|(_, content)| chunk::chunk_content(content, budget))
         .collect()
 }
 
@@ -406,6 +422,25 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// Token budget charging one token per Unicode scalar, so planning
+    /// tests never initialize (or download) the embedding model. The
+    /// 800-token budget matches the chunker's previous character cap.
+    struct CharTokens(usize);
+
+    impl chunk::TokenBudget for CharTokens {
+        fn count_tokens(&self, text: &str) -> usize {
+            text.chars().count()
+        }
+        fn max_tokens(&self) -> usize {
+            self.0
+        }
+    }
+
+    /// Standard budget for the pipeline tests below.
+    fn plan_ranges(docs: &[(String, String)]) -> Vec<Vec<chunk::Chunk>> {
+        plan_chunk_ranges(docs, &CharTokens(800)).expect("chunk planning should succeed")
+    }
+
     #[test]
     fn derives_legacy_path_for_expected_identifier() {
         let new = PathBuf::from(
@@ -449,7 +484,7 @@ mod tests {
     #[test]
     fn empty_content_stages_no_chunks() {
         let docs = vec![(r"D:\Docs\empty.txt".to_string(), String::new())];
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         assert!(ranges[0].is_empty());
         let staged = assemble_staged(docs, ranges, Vec::new()).expect("assemble");
         assert_eq!(staged.len(), 1);
@@ -461,7 +496,7 @@ mod tests {
     fn chunk_offsets_match_content_and_chunker() {
         let content = format!("{}\n\n{}", "A".repeat(500), "B".repeat(1500));
         let docs = vec![(r"D:\Docs\a.txt".to_string(), content.clone())];
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         let owners = chunk_owners(&ranges);
         let vectors = vec![fake_vector(); owners.len()];
         let staged = assemble_staged(docs, ranges.clone(), vectors).expect("assemble");
@@ -487,7 +522,7 @@ mod tests {
     #[test]
     fn incorrect_embedding_counts_are_rejected() {
         let docs = vec![(r"D:\Docs\a.txt".to_string(), "hello world".to_string())];
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         assert_eq!(ranges[0].len(), 1);
         let err = assemble_staged(docs, ranges, Vec::new())
             .err()
@@ -501,7 +536,7 @@ mod tests {
         let docs: Vec<(String, String)> = (0..40)
             .map(|i| (format!(r"D:\Docs\{i}.txt"), format!("doc {i}")))
             .collect();
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         let owners = chunk_owners(&ranges);
         assert_eq!(owners.len(), 40);
         assert_eq!(owners.chunks(embed::EMBED_BATCH_SIZE).count(), 2);
@@ -523,7 +558,7 @@ mod tests {
             (r"D:\Docs\long.txt".to_string(), "x".repeat(25_000)),
             (r"D:\Docs\short.txt".to_string(), "second document".to_string()),
         ];
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         assert!(ranges[0].len() > embed::EMBED_BATCH_SIZE);
         assert_eq!(ranges[1].len(), 1);
 
@@ -560,7 +595,7 @@ mod tests {
     fn staged_chunks_reconcile_and_are_searchable_above_threshold() {
         let content = format!("{}\n\n{}", "A".repeat(500), "B".repeat(1500));
         let docs = vec![(r"D:\Docs\a.txt".to_string(), content)];
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         let owners = chunk_owners(&ranges);
         let vectors = vec![fake_vector(); owners.len()];
         let staged = assemble_staged(docs, ranges, vectors).expect("assemble");
@@ -579,7 +614,7 @@ mod tests {
     #[test]
     fn empty_documents_remain_counted_but_not_searchable() {
         let docs = vec![(r"D:\Docs\empty.txt".to_string(), String::new())];
-        let ranges = plan_chunk_ranges(&docs);
+        let ranges = plan_ranges(&docs);
         let staged = assemble_staged(docs, ranges, Vec::new()).expect("assemble");
 
         let mut store = store::VectorStore::new();
