@@ -23,17 +23,32 @@
 //     secondary bound: the token budget stays authoritative, but the
 //     character ceiling keeps token-sparse text (very long unbroken
 //     words, base64, and the like) from producing very large chunks.
+//   * Bounded working memory. Only the current `MAX_CHARS` window's
+//     character boundaries are materialized, so peak auxiliary metadata
+//     does not grow with document length.
 //   * UTF-8-safe. Cuts are taken only at `char` boundaries, so every
 //     chunk is a valid UTF-8 slice and no code point is split.
 //   * Complete coverage. Every character appears in at least one chunk.
 //   * Intentional overlap. Neighbouring chunks share up to `OVERLAP_CHARS`
 //     characters. If the configured overlap cannot fit the budget it is
 //     reduced to the largest affordable value (possibly zero) so that
-//     chunks still overlap where possible and always advance.
+//     chunks still overlap where possible and always advance. The overlap
+//     scheduled for the next window is additionally capped at half of the
+//     emitted chunk's character length (rounded down), so a short chunk
+//     never makes the next window start inside its own last half.
 //   * Forward progress. Each chunk's end strictly advances past the
 //     previous end: a boundary already used as the previous chunk's end
 //     is never reused, so a finite input yields a finite, non-repeating
-//     chunk list with no redundant nested chunks.
+//     chunk list with no redundant nested chunks. Each scheduled next
+//     start also advances by at least half of the emitted chunk's length.
+//     How far the next end advances is decided by the token counter,
+//     budget, and boundary choice, not by the half-overlap cap: a budget
+//     that cannot fit more than a few characters beyond the overlap can
+//     still advance the end one character at a time. The stronger "at
+//     least half a chunk of end progress" bound asserted by the tests
+//     below applies only to their boundary-free `CharTokens` fixture; when
+//     paragraph or sentence boundary selection is active it can be lower
+//     even for a monotone counter.
 //   * Strictly increasing starts. Each window opens strictly after the
 //     previous window's start, so no start is repeated.
 //   * LF and CRLF line endings are both understood for paragraph breaks.
@@ -46,6 +61,12 @@
 /// characters (not tokens) so the overlap stays byte-stable and easy to
 /// reason about. When the budget cannot afford this much overlap it is
 /// reduced (see `largest_fitting_overlap`).
+///
+/// The overlap scheduled after a chunk is additionally capped at half that
+/// chunk's character length, so the next window starts at least half a
+/// chunk later. This guarantees start progress only. End progress depends
+/// on the token counter and budget, and preferred paragraph/sentence
+/// boundaries can stop the next chunk early even with a monotone counter.
 const OVERLAP_CHARS: usize = 120;
 
 /// Secondary hard maximum on a chunk's length, in Unicode scalar values.
@@ -116,30 +137,32 @@ pub fn chunk_content(
     content: &str,
     budget: &dyn TokenBudget,
 ) -> Result<Vec<Chunk>, TokenBudgetTooSmall> {
-    // Byte offset of every char boundary, plus the end offset.
-    let mut cuts: Vec<usize> = content.char_indices().map(|(i, _)| i).collect();
-    cuts.push(content.len());
-    let char_count = cuts.len() - 1;
-    if char_count == 0 {
+    if content.is_empty() {
         return Ok(Vec::new());
     }
 
-    let chars: Vec<char> = content.chars().collect();
     let max_tokens = budget.max_tokens();
+    let mut window = Window::new(content);
     let mut chunks = Vec::new();
-    let mut start = 0usize; // char index where the next window begins
-    let mut previous_end = 0usize; // previous chunk's end, in chars
+    // The current window and the previous chunk's end are tracked in both
+    // coordinate systems: absolute byte offsets for slices and global char
+    // indices for the overlap search's original `previous_end + 1` bound.
+    let mut start_byte = 0usize;
+    let mut start_char = 0usize;
+    let mut previous_end_byte = 0usize;
+    let mut previous_end_char = 0usize;
 
     loop {
-        // The largest window from `start` allowed by the token budget,
+        window.reset(start_byte);
+
+        // The largest window from `start_byte` allowed by the token budget,
         // additionally capped by the secondary character bound.
-        let cap = (start + MAX_CHARS).min(char_count);
-        let hard_end = match fitting_end(content, &cuts, start, cap, budget, max_tokens) {
+        let hard_end = match fitting_end(&mut window, budget, max_tokens) {
             Some(end) => end,
             None => {
                 return Err(TokenBudgetTooSmall {
                     max_tokens,
-                    offset: cuts[start],
+                    offset: start_byte,
                 })
             }
         };
@@ -149,65 +172,92 @@ pub fn chunk_content(
         // shrink the overlap. `largest_fitting_overlap` normally returns a
         // start strictly after the current one; a non-monotone token counter
         // can, however, make it report no reduction even though a longer
-        // window fits. Reusing `start` would then spin forever, so fall back
-        // to `previous_end` and drop the overlap for this window. Because
-        // `hard_end >= start + 1` and `hard_end <= previous_end` here,
-        // `previous_end > start`, so this always strictly advances `start`.
-        if hard_end <= previous_end {
-            let previous_start = start;
-            let reduced =
-                largest_fitting_overlap(content, &cuts, start, previous_end, budget, max_tokens);
-            start = match reduced {
+        // window fits. Reusing the current start would then spin forever, so
+        // fall back to the previous end and drop the overlap for this window.
+        // Because `hard_end >= 1` and `hard_end <= previous_end_local` here,
+        // `previous_end_local > 0`, so this always strictly advances.
+        debug_assert!(previous_end_char >= start_char);
+        let previous_end_local = previous_end_char - start_char;
+        debug_assert!(previous_end_local <= OVERLAP_CHARS);
+        if hard_end <= previous_end_local {
+            let previous_start_byte = start_byte;
+            let reduced = largest_fitting_overlap(
+                content,
+                previous_end_byte,
+                previous_end_char,
+                budget,
+                max_tokens,
+            );
+            match reduced {
                 // The overlap shrank to a start strictly after the current
                 // one; keep it.
-                Some(reduced_start) if reduced_start > previous_start => reduced_start,
+                Some((reduced_byte, width)) if reduced_byte > previous_start_byte => {
+                    start_byte = reduced_byte;
+                    start_char = previous_end_char + 1 - width;
+                }
                 // Either no overlap fits (not even a single character at
                 // `previous_end`), or a non-monotone counter reported no
                 // reduction. Retry from `previous_end`: if the character
                 // there cannot fit, the next pass reports the explicit
                 // `TokenBudgetTooSmall` error.
-                _ => previous_end,
-            };
-            debug_assert!(start > previous_start);
+                _ => {
+                    start_byte = previous_end_byte;
+                    start_char = previous_end_char;
+                }
+            }
+            debug_assert!(start_byte > previous_start_byte);
             continue;
         }
 
         // Prefer a paragraph/sentence boundary inside the window; fall back
-        // to the hard end.
-        let chosen = if hard_end == char_count {
-            char_count
+        // to the hard end. End-of-document is a byte comparison: the window
+        // may stop at `MAX_CHARS` while more input remains.
+        let chosen = if window.byte(hard_end) == content.len() {
+            hard_end
         } else {
             // Only boundaries strictly after the previous end and more
             // than `OVERLAP_CHARS` past this chunk's start are eligible.
-            // The latter is the target overlap; when it does not fit, the
-            // `hard_end` fallback is used and the overlap is reduced.
-            let first_eligible = (previous_end + 1).max(start + OVERLAP_CHARS + 1);
-            choose_end(&chars, hard_end, first_eligible)
+            // The latter is the maximum target overlap; the overlap
+            // scheduled for the next window is capped at half this chunk's
+            // length, and when it does not fit the `hard_end` fallback is
+            // used and the overlap is reduced.
+            let first_eligible = (previous_end_local + 1).max(OVERLAP_CHARS + 1);
+            choose_end(&window, hard_end, first_eligible)
         };
 
         // Verify the emitted chunk. `hard_end` is known to be within
         // budget, so it is the fallback if a preferred boundary is not
         // (possible only for a token counter that is not monotone in text
         // length). This guarantees the chunk never exceeds the budget.
-        let end = if budget.count_tokens(&content[cuts[start]..cuts[chosen]]) <= max_tokens {
+        let end = if budget.count_tokens(&content[start_byte..window.byte(chosen)]) <= max_tokens {
             chosen
         } else {
             hard_end
         };
+        let end_byte = window.byte(end);
 
         chunks.push(Chunk {
-            start: cuts[start],
-            end: cuts[end],
+            start: start_byte,
+            end: end_byte,
         });
 
-        if end == char_count {
+        if end_byte == content.len() {
             break;
         }
-        previous_end = end;
-        // Begin the next window `OVERLAP_CHARS` before this chunk's end.
-        // The reduced-overlap path above adjusts `start` further forward
-        // when the budget cannot afford this much overlap.
-        start = end.saturating_sub(OVERLAP_CHARS);
+        previous_end_byte = end_byte;
+        previous_end_char = start_char + end;
+        // Begin the next window by backing up over the overlap. The
+        // scheduled overlap is capped at half this chunk's character
+        // length, so the next window starts at least half a chunk later
+        // (and a one-character chunk has no overlap at all). This bounds
+        // the next start, not how far the next end advances: that still
+        // depends on what the token counter and budget can fit. The
+        // reduced-overlap path above applies when the budget cannot
+        // afford even this much overlap.
+        let chunk_len = end; // local window start is 0
+        let overlap = OVERLAP_CHARS.min(chunk_len / 2);
+        start_byte = window.byte(end - overlap);
+        start_char = previous_end_char - overlap;
     }
 
     Ok(chunks)
@@ -218,44 +268,110 @@ pub fn chunk_text<'a>(content: &'a str, chunk: &Chunk) -> &'a str {
     &content[chunk.start..chunk.end]
 }
 
-/// Largest char index `e` with `start < e <= cap` whose window
-/// `content[cuts[start]..cuts[e]]` costs at most `max_tokens`, or `None`
-/// when even the single character at `start` exceeds the budget.
+/// A lazy, reusable view of at most `MAX_CHARS` characters starting at an
+/// absolute UTF-8 byte offset. Only the boundaries needed by the current
+/// window are materialized, so peak metadata is independent of document
+/// length.
+struct Window<'a> {
+    content: &'a str,
+    /// Absolute byte offset of this window's first character.
+    base: usize,
+    /// Byte offsets of every materialized char boundary, relative to `base`.
+    /// `cuts[0]` is always zero; `cuts[local]` is the boundary before the
+    /// char at local index `local`.
+    cuts: Vec<usize>,
+}
+
+impl<'a> Window<'a> {
+    fn new(content: &'a str) -> Self {
+        Self {
+            content,
+            base: 0,
+            cuts: Vec::with_capacity(MAX_CHARS + 1),
+        }
+    }
+
+    /// Point the window at `base`, discarding all previously materialized
+    /// boundaries while retaining the fixed-capacity allocation.
+    fn reset(&mut self, base: usize) {
+        debug_assert!(base <= self.content.len());
+        debug_assert!(self.content.is_char_boundary(base));
+        self.base = base;
+        self.cuts.clear();
+        self.cuts.push(0);
+    }
+
+    /// Number of characters materialized so far.
+    fn chars(&self) -> usize {
+        self.cuts.len() - 1
+    }
+
+    /// Absolute byte offset of local char boundary `local`.
+    fn byte(&self, local: usize) -> usize {
+        debug_assert!(local <= self.chars());
+        self.base + self.cuts[local]
+    }
+
+    /// Materialize boundaries through local char index `local_end`, stopping
+    /// at the end of the input. Returns the number of characters available
+    /// in the window (at most `MAX_CHARS`).
+    fn ensure_through(&mut self, local_end: usize) -> usize {
+        debug_assert!(local_end <= MAX_CHARS);
+        while self.chars() < local_end {
+            let last_rel = *self.cuts.last().unwrap();
+            let abs = self.base + last_rel;
+            let Some(ch) = self.content[abs..].chars().next() else {
+                break;
+            };
+            self.cuts.push(last_rel + ch.len_utf8());
+        }
+        debug_assert!(self.cuts.len() <= MAX_CHARS + 1);
+        self.chars()
+    }
+}
+
+/// Largest local char index `e`, `0 < e <= MAX_CHARS`, whose window
+/// `content[base..byte(e)]` costs at most `max_tokens`, or `None` when even
+/// the single character at the window start exceeds the budget.
 ///
 /// The window is grown geometrically until it overflows, then narrowed by
-/// binary search between a fitting and an overflowing length, so the work
-/// per chunk is proportional to the chunk size rather than to the
-/// remaining document. `cap` bounds the search (the token budget and the
-/// secondary character bound combined), so a token-sparse but very long
-/// input is never tokenized in full.
+/// binary search between a fitting and an overflowing length. The probe
+/// sequence is unchanged from the whole-document implementation: 1, 2, 4,
+/// ... up to the `MAX_CHARS` cap or the end of input, then binary search.
+/// A token-sparse but very long input is never tokenized in full.
 fn fitting_end(
-    content: &str,
-    cuts: &[usize],
-    start: usize,
-    cap: usize,
+    window: &mut Window<'_>,
     budget: &dyn TokenBudget,
     max_tokens: usize,
 ) -> Option<usize> {
-    // The caller guarantees `cap > start`, so there is at least one char.
-    let count_upto = |end: usize| budget.count_tokens(&content[cuts[start]..cuts[end]]);
-
-    if count_upto(start + 1) > max_tokens {
+    // The caller guarantees non-empty content.
+    if window.ensure_through(1) == 0 {
+        return None;
+    }
+    if budget.count_tokens(&window.content[window.byte(0)..window.byte(1)]) > max_tokens {
         return None;
     }
 
     // `fitted` is the largest known-fitting length; grow geometrically
-    // until the window overflows or reaches `cap`.
-    let mut fitted = start + 1;
-    let mut probe = start + 1;
-    while probe < cap {
-        let next = (start + (probe - start).saturating_mul(2)).min(cap);
-        if count_upto(next) > max_tokens {
+    // until the window overflows or reaches the character cap.
+    let mut fitted = 1usize;
+    let mut probe = 1usize;
+    loop {
+        let target = probe.saturating_mul(2).min(MAX_CHARS);
+        let available = window.ensure_through(target);
+        if available <= probe {
+            return Some(fitted);
+        }
+        let next = available;
+        if budget.count_tokens(&window.content[window.byte(0)..window.byte(next)]) > max_tokens {
             // `fitted` fits and `next` overflows; narrow in between.
             let mut lo = fitted;
             let mut hi = next;
             while hi - lo > 1 {
                 let mid = lo + (hi - lo) / 2;
-                if count_upto(mid) <= max_tokens {
+                if budget.count_tokens(&window.content[window.byte(0)..window.byte(mid)])
+                    <= max_tokens
+                {
                     lo = mid;
                 } else {
                     hi = mid;
@@ -266,44 +382,67 @@ fn fitting_end(
         fitted = next;
         probe = next;
     }
-    Some(fitted)
 }
 
 /// Reduce the overlap when the configured one does not fit the budget.
 ///
-/// Returns the largest start `s` with `start < s <= previous_end` such that
-/// the window `content[s..previous_end + 1]` fits `max_tokens`, i.e. the
-/// largest affordable overlap (`previous_end - s`), capped at
-/// `OVERLAP_CHARS`. The returned start therefore always lets the next
-/// chunk advance past `previous_end` within budget. Returns `None` when
-/// even the single character at `previous_end` exceeds the budget, so no
-/// in-budget chunk can advance.
+/// Returns the largest absolute byte start `s`, together with the candidate
+/// width in characters, such that `content[s..tail_end]` fits `max_tokens`,
+/// where `tail_end` is one character past `previous_end_byte`. The overlap
+/// is the number of characters before `previous_end_byte`, so the largest
+/// candidate has `OVERLAP_CHARS` preceding characters plus one character
+/// beyond the previous end.
+///
+/// This search is intentionally independent of the current main window: it
+/// may return a start before the main window's base. The caller's strict
+/// `reduced_start > previous_start` guard rejects a result that does not
+/// actually advance. Returns `None` when even the single character at
+/// `previous_end` exceeds the budget.
 fn largest_fitting_overlap(
     content: &str,
-    cuts: &[usize],
-    start: usize,
-    previous_end: usize,
+    previous_end_byte: usize,
+    previous_end_char: usize,
     budget: &dyn TokenBudget,
     max_tokens: usize,
-) -> Option<usize> {
-    debug_assert!(start < previous_end);
+) -> Option<(usize, usize)> {
+    debug_assert!(previous_end_char > 0);
+    debug_assert!(content.is_char_boundary(previous_end_byte));
+
+    let next_char_len = content[previous_end_byte..].chars().next()?.len_utf8();
+    let tail_end = previous_end_byte + next_char_len;
 
     // A window of `w` chars ending at `previous_end + 1` has an overlap of
-    // `w - 1` chars; grow `w` up to the configured overlap plus one.
-    let max_window = (OVERLAP_CHARS + 1).min(previous_end + 1);
-    let fits = |w: usize| {
-        budget.count_tokens(&content[cuts[previous_end + 1 - w]..cuts[previous_end + 1]])
-            <= max_tokens
-    };
+    // `w - 1` chars. `previous_end_char + 1` is the original global bound,
+    // not a distance from the current window's start.
+    let max_window = (OVERLAP_CHARS + 1).min(previous_end_char + 1);
 
+    // Boundaries of the last `max_window` chars ending at `tail_end`, in
+    // ascending absolute byte order. At most OVERLAP_CHARS + 2 entries.
+    let mut bounds = [0usize; OVERLAP_CHARS + 2];
+    let mut count = 1usize;
+    bounds[0] = tail_end;
+    let mut boundary = tail_end;
+    while count <= max_window {
+        let (previous, _) = content[..boundary].char_indices().next_back()?;
+        boundary = previous;
+        bounds[count] = boundary;
+        count += 1;
+    }
+    bounds[..count].reverse();
+    debug_assert_eq!(bounds[count - 1], tail_end);
+
+    let fits =
+        |w: usize| budget.count_tokens(&content[bounds[count - 1 - w]..tail_end]) <= max_tokens;
+
+    // Preserve the original probe order exactly: one character, then the
+    // maximum candidate, then binary-search midpoints.
     if !fits(1) {
         return None;
     }
     if fits(max_window) {
-        return Some(previous_end + 1 - max_window);
+        return Some((bounds[count - 1 - max_window], max_window));
     }
 
-    // `fits(1)` holds and `fits(max_window)` does not; narrow between them.
     let mut lo = 1usize;
     let mut hi = max_window;
     while hi - lo > 1 {
@@ -314,7 +453,7 @@ fn largest_fitting_overlap(
             hi = mid;
         }
     }
-    Some(previous_end + 1 - lo)
+    Some((bounds[count - 1 - lo], lo))
 }
 
 /// A boundary between two chars that the splitter prefers.
@@ -329,16 +468,20 @@ enum BreakKind {
 /// Only boundaries at or after `first_eligible` are eligible. Callers pass
 /// a value strictly past the previous end and more than `OVERLAP_CHARS`
 /// after the current chunk's start, so a chunk never ends where the
-/// previous chunk ended and, when the overlap is affordable, every
-/// non-final chunk is longer than the overlap (which keeps the next start
-/// strictly advancing). A paragraph boundary is preferred; if none is
-/// present, a sentence boundary; if neither is present, `hard_end` (a hard
-/// split at a character boundary, which is within budget).
-fn choose_end(chars: &[char], hard_end: usize, first_eligible: usize) -> usize {
+/// previous chunk ended. The overlap scheduled for the next window is
+/// capped at half the emitted chunk's length, so every non-final chunk is
+/// longer than its overlap, which keeps the next start strictly advancing.
+/// This guarantees start progress only. How far the next end advances
+/// depends on the token counter and budget, and choosing an earlier
+/// paragraph or sentence boundary here can make it less than half a chunk
+/// even for a monotone counter. A paragraph boundary is preferred; if none
+/// is present, a sentence boundary; if neither is present, `hard_end` (a
+/// hard split at a character boundary, which is within budget).
+fn choose_end(window: &Window<'_>, hard_end: usize, first_eligible: usize) -> usize {
     let mut sentence = None;
     // Scan backward so the first hit of each kind is its rightmost.
     for cut in (first_eligible..=hard_end).rev() {
-        match break_kind_before(chars, cut) {
+        match break_kind_before(window.content, window.byte(cut)) {
             Some(BreakKind::Paragraph) => return cut,
             Some(BreakKind::Sentence) => {
                 if sentence.is_none() {
@@ -351,13 +494,15 @@ fn choose_end(chars: &[char], hard_end: usize, first_eligible: usize) -> usize {
     sentence.unwrap_or(hard_end)
 }
 
-/// Classify the boundary at char index `cut` by the char just before it.
-fn break_kind_before(chars: &[char], cut: usize) -> Option<BreakKind> {
-    if cut == 0 || cut > chars.len() {
+/// Classify the absolute byte boundary `cut` by the character just before it.
+/// Using the whole source, rather than the current window, keeps newline runs
+/// that cross a window base exactly as they were in the whole-document scan.
+fn break_kind_before(content: &str, cut: usize) -> Option<BreakKind> {
+    if cut == 0 || cut > content.len() {
         return None;
     }
-    let prev = chars[cut - 1];
-    if (prev == '\n' || prev == '\r') && line_break_count(chars, cut) >= 2 {
+    let prev = content[..cut].chars().next_back()?;
+    if (prev == '\n' || prev == '\r') && line_break_count(content, cut) >= 2 {
         return Some(BreakKind::Paragraph);
     }
     if is_sentence_end(prev) {
@@ -366,22 +511,23 @@ fn break_kind_before(chars: &[char], cut: usize) -> Option<BreakKind> {
     None
 }
 
-/// Number of logical line breaks in the run of `\r`/`\n` chars ending
-/// just before `end`, counting CRLF as a single break. Two or more means
-/// a blank line, i.e. a paragraph break.
-fn line_break_count(chars: &[char], end: usize) -> usize {
+/// Number of logical line breaks in the run of `\r`/`\n` bytes ending just
+/// before `end`, counting CRLF as a single break. Two or more means a blank
+/// line, i.e. a paragraph break. `end` is an absolute byte boundary.
+fn line_break_count(content: &str, end: usize) -> usize {
+    let bytes = content.as_bytes();
     let mut count = 0usize;
     let mut i = end;
     while i > 0 {
-        match chars[i - 1] {
-            '\n' => {
+        match bytes[i - 1] {
+            b'\n' => {
                 count += 1;
                 i -= 1;
             }
-            '\r' => {
+            b'\r' => {
                 // A '\r' immediately followed by '\n' (toward `end`) is
                 // the start of a CRLF pair already counted by that '\n'.
-                if i < end && chars[i] == '\n' {
+                if i < end && bytes[i] == b'\n' {
                     i -= 1;
                 } else {
                     count += 1;
@@ -402,7 +548,7 @@ fn is_sentence_end(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     use super::*;
 
@@ -483,6 +629,33 @@ mod tests {
         }
     }
 
+    /// One token per scalar that records the character length of every
+    /// probed slice. Used to pin the search order as well as the result.
+    struct RecordingTokens {
+        budget: usize,
+        calls: RefCell<Vec<usize>>,
+    }
+
+    impl RecordingTokens {
+        fn new(budget: usize) -> Self {
+            Self {
+                budget,
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl TokenBudget for RecordingTokens {
+        fn count_tokens(&self, text: &str) -> usize {
+            let len = text.chars().count();
+            self.calls.borrow_mut().push(len);
+            len
+        }
+        fn max_tokens(&self) -> usize {
+            self.budget
+        }
+    }
+
     /// Budget used by the layout tests; matches the previous 800-character
     /// cap so their expectations are unchanged.
     const BUDGET: usize = 800;
@@ -549,7 +722,13 @@ mod tests {
         for content in ["a", "hello, world", "line one\nline two"] {
             let chunks = chunk(content, BUDGET);
             assert_eq!(chunks.len(), 1, "content: {content:?}");
-            assert_eq!(chunks[0], Chunk { start: 0, end: content.len() });
+            assert_eq!(
+                chunks[0],
+                Chunk {
+                    start: 0,
+                    end: content.len()
+                }
+            );
             assert_eq!(chunk_text(content, &chunks[0]), content);
         }
     }
@@ -910,7 +1089,10 @@ mod tests {
         let content = "a".repeat(MAX_CHARS * 3 + 7);
         let counter = LongWordIsOneToken;
         let chunks = chunk_content(&content, &counter).expect("chunking should succeed");
-        assert!(chunks.len() >= 3, "character cap did not split the long word");
+        assert!(
+            chunks.len() >= 3,
+            "character cap did not split the long word"
+        );
         for chunk in &chunks {
             assert!(chunk_text(&content, chunk).chars().count() <= MAX_CHARS);
         }
@@ -975,6 +1157,128 @@ mod tests {
     }
 
     #[test]
+    fn small_budgets_bound_overlap_and_keep_coverage() {
+        // For every budget on either side of OVERLAP_CHARS, the overlap
+        // into the next chunk must not exceed either the configured target
+        // or half of the chunk just emitted. This is what stops a small
+        // budget from re-reading all but a few characters of every chunk.
+        let content = "q".repeat(4000);
+        let budgets = [1usize, 2, 49, 50, 119, 120, 121, 122, 200, 800];
+
+        for budget in budgets {
+            let counter = CharTokens(budget);
+            let chunks = chunk_content(&content, &counter).expect("chunking should succeed");
+            assert_valid_and_covered(&content, &counter, &chunks);
+
+            for pair in chunks.windows(2) {
+                let (previous, current) = (pair[0], pair[1]);
+                let previous_len = content[previous.start..previous.end].chars().count();
+                let overlap = content[current.start..previous.end].chars().count();
+
+                assert!(
+                    current.start > previous.start,
+                    "budget {budget}: start repeated"
+                );
+                assert!(
+                    current.end > previous.end,
+                    "budget {budget}: end did not advance"
+                );
+                assert!(
+                    overlap <= OVERLAP_CHARS,
+                    "budget {budget}: overlap {overlap} exceeds OVERLAP_CHARS"
+                );
+                assert!(
+                    overlap <= previous_len / 2,
+                    "budget {budget}: overlap {overlap} exceeds half of {previous_len}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn small_budgets_keep_chunk_count_and_progress_bounded() {
+        // Test-scoped bound: only for this boundary-free fixture under the
+        // monotone one-token-per-character counter does the half-overlap cap
+        // make each non-final end advance by at least half of `capacity`.
+        // Paragraph/sentence boundary selection can make end progress
+        // smaller even with a monotone counter, so this is not a general
+        // chunker guarantee. That bound makes the chunk count roughly twice
+        // the ideal `n / capacity`, instead of one chunk per character when
+        // the budget is at or just above OVERLAP_CHARS.
+        let content = "q".repeat(4000);
+        let char_count = content.chars().count();
+        let budgets = [1usize, 2, 49, 50, 119, 120, 121, 122, 200, 800];
+
+        for budget in budgets {
+            let chunks = chunk(&content, budget);
+            let capacity = budget.min(MAX_CHARS).max(1);
+            let min_progress = (capacity + 1) / 2;
+            let bound = (char_count + min_progress - 1) / min_progress + 2;
+
+            assert!(
+                chunks.len() <= bound,
+                "budget {budget}: {} chunks exceeds the bound {bound}",
+                chunks.len()
+            );
+            // The transition into the final chunk may be shorter than a
+            // whole step because the tail is whatever remains.
+            for pair in chunks.windows(2).take(chunks.len().saturating_sub(2)) {
+                let progress = pair[1].end - pair[0].end;
+                assert!(
+                    progress >= min_progress,
+                    "budget {budget}: end advanced by {progress}, expected at least {min_progress}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn small_budget_multibyte_progress_is_bounded() {
+        // The same test-scoped progress check on boundary-free mixed-width
+        // UTF-8 under the monotone CharTokens counter: overlap and progress
+        // are measured in characters while offsets stay in bytes.
+        let budget = 40usize;
+        let content = "漢é😀ß ".repeat(800);
+        let char_count = content.chars().count();
+        let chunks = chunk(&content, budget);
+        let capacity = budget.min(MAX_CHARS).max(1);
+        let min_progress = (capacity + 1) / 2;
+        let bound = (char_count + min_progress - 1) / min_progress + 2;
+
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks.len() <= bound,
+            "{} chunks exceeds the bound {bound}",
+            chunks.len()
+        );
+        assert_valid_and_covered(&content, &CharTokens(budget), &chunks);
+
+        for pair in chunks.windows(2) {
+            let (previous, current) = (pair[0], pair[1]);
+            let previous_len = content[previous.start..previous.end].chars().count();
+            let overlap = content[current.start..previous.end].chars().count();
+
+            assert!(current.start > previous.start, "start repeated");
+            assert!(current.end > previous.end, "end did not advance");
+            assert!(
+                overlap <= OVERLAP_CHARS,
+                "overlap {overlap} exceeds OVERLAP_CHARS"
+            );
+            assert!(
+                overlap <= previous_len / 2,
+                "overlap {overlap} exceeds half of {previous_len}"
+            );
+        }
+        for pair in chunks.windows(2).take(chunks.len().saturating_sub(2)) {
+            let progress = content[pair[0].end..pair[1].end].chars().count();
+            assert!(
+                progress >= min_progress,
+                "end advanced by {progress}, expected at least {min_progress}"
+            );
+        }
+    }
+
+    #[test]
     fn non_monotone_budget_terminates_and_covers_everything() {
         // The token counter is not monotone in text length, so
         // `largest_fitting_overlap` can be asked whether a longer window
@@ -999,6 +1303,248 @@ mod tests {
     }
 
     #[test]
+    fn golden_chunk_layout_matches_the_pre_refactor_chunker() {
+        // Captured from the whole-document implementation with the
+        // half-overlap cap in place, before boundary metadata was windowed.
+        let mixed = format!(
+            "{}\n\n{}. {}\r\n\r\n{}",
+            "A".repeat(500),
+            "x".repeat(700),
+            "sentence tail",
+            "漢é😀ß ".repeat(300),
+        );
+        assert_eq!(
+            chunk(&mixed, 800),
+            vec![
+                Chunk { start: 0, end: 502 },
+                Chunk {
+                    start: 382,
+                    end: 1182
+                },
+                Chunk {
+                    start: 1062,
+                    end: 1221
+                },
+                Chunk {
+                    start: 1142,
+                    end: 2952
+                },
+                Chunk {
+                    start: 2664,
+                    end: 4584
+                },
+                Chunk {
+                    start: 4296,
+                    end: 4821
+                },
+            ]
+        );
+        assert_valid_and_covered(&mixed, &CharTokens(800), &chunk(&mixed, 800));
+
+        let small = format!(
+            "{}\n\n{}. {}\r\n\r\n{}",
+            "word ".repeat(40),
+            "y".repeat(150),
+            "end",
+            "漢é😀ß ".repeat(80),
+        );
+        assert_eq!(
+            chunk(&small, 137),
+            vec![
+                Chunk { start: 0, end: 137 },
+                Chunk {
+                    start: 69,
+                    end: 202
+                },
+                Chunk {
+                    start: 136,
+                    end: 273
+                },
+                Chunk {
+                    start: 205,
+                    end: 342
+                },
+                Chunk {
+                    start: 274,
+                    end: 481
+                },
+                Chunk {
+                    start: 343,
+                    end: 648
+                },
+                Chunk {
+                    start: 484,
+                    end: 814
+                },
+                Chunk {
+                    start: 649,
+                    end: 978
+                },
+                Chunk {
+                    start: 816,
+                    end: 1144
+                },
+                Chunk {
+                    start: 982,
+                    end: 1309
+                },
+                Chunk {
+                    start: 1146,
+                    end: 1321
+                },
+            ]
+        );
+        assert_valid_and_covered(&small, &CharTokens(137), &chunk(&small, 137));
+    }
+
+    #[test]
+    fn max_chars_boundary_is_exact_and_one_over_splits() {
+        let exact = "a".repeat(MAX_CHARS);
+        let counter = LongWordIsOneToken;
+        assert_eq!(
+            chunk_content(&exact, &counter).expect("chunking should succeed"),
+            vec![Chunk {
+                start: 0,
+                end: MAX_CHARS
+            }]
+        );
+
+        let over = "a".repeat(MAX_CHARS + 1);
+        let chunks = chunk_content(&over, &counter).expect("chunking should succeed");
+        assert_eq!(
+            chunks,
+            vec![
+                Chunk {
+                    start: 0,
+                    end: MAX_CHARS
+                },
+                Chunk {
+                    start: MAX_CHARS - OVERLAP_CHARS,
+                    end: MAX_CHARS + 1
+                },
+            ]
+        );
+        assert_valid_and_covered(&over, &counter, &chunks);
+    }
+
+    #[test]
+    fn max_chars_multibyte_boundary_is_char_aligned() {
+        let exact = "漢".repeat(MAX_CHARS);
+        let counter = LongWordIsOneToken;
+        let chunks = chunk_content(&exact, &counter).expect("chunking should succeed");
+        assert_eq!(
+            chunks,
+            vec![Chunk {
+                start: 0,
+                end: exact.len()
+            }]
+        );
+
+        let over = "漢".repeat(MAX_CHARS + 1);
+        let chunks = chunk_content(&over, &counter).expect("chunking should succeed");
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].start, 0);
+        assert_eq!(chunks[0].end, MAX_CHARS * "漢".len());
+        assert_eq!(chunks[1].start, (MAX_CHARS - OVERLAP_CHARS) * "漢".len());
+        assert_eq!(chunks[1].end, over.len());
+        assert_valid_and_covered(&over, &counter, &chunks);
+    }
+
+    #[test]
+    fn paragraph_run_crossing_a_window_start_is_classified_absolutely() {
+        // The second window opens inside a long run of newlines. The run's
+        // blank-line boundary at char 800 is still eligible and must win.
+        let content = format!(
+            "{}{}{}",
+            "A".repeat(500),
+            "\n".repeat(300),
+            "B".repeat(1000)
+        );
+        let chunks = chunk(&content, 670);
+        assert_eq!(chunks[0], Chunk { start: 0, end: 670 });
+        assert_eq!(chunks[1].start, 550);
+        assert_eq!(chunks[1].end, 800);
+        assert_valid_and_covered(&content, &CharTokens(670), &chunks);
+    }
+
+    #[test]
+    fn crlf_run_crossing_a_window_start_is_classified_absolutely() {
+        // Same layout with CRLF pairs: the run crossing the second window's
+        // start must count as a single logical paragraph break per pair.
+        let content = format!(
+            "{}{}{}",
+            "A".repeat(500),
+            "\r\n".repeat(150),
+            "B".repeat(1000)
+        );
+        let chunks = chunk(&content, 670);
+        assert_eq!(chunks[0], Chunk { start: 0, end: 670 });
+        assert_eq!(chunks[1].start, 550);
+        assert_eq!(chunks[1].end, 800);
+        assert_valid_and_covered(&content, &CharTokens(670), &chunks);
+    }
+
+    #[test]
+    fn non_monotone_counter_near_the_max_chars_edge_terminates_and_covers() {
+        // The first window stops one character before `MAX_CHARS` because
+        // that exact probe overflows. Later probes force the
+        // reduced-overlap path near the window edge; the non-monotone
+        // counter must not cause a repeated start or a hang.
+        const OVERFLOWING: [usize; 3] = [121, 122, MAX_CHARS];
+        let content = "x".repeat(MAX_CHARS + 1);
+        let budget = NonMonotoneTokens {
+            overflowing: &OVERFLOWING,
+            budget: 2,
+            calls: Cell::new(0),
+        };
+        let chunks = chunk_content(&content, &budget).expect("chunking should terminate");
+        assert!(chunks.len() > 2);
+        assert_valid_and_covered(&content, &budget, &chunks);
+        for pair in chunks.windows(2) {
+            assert!(pair[1].start > pair[0].start, "a start boundary repeated");
+            assert!(pair[1].end > pair[0].end, "no forward progress");
+        }
+    }
+
+    #[test]
+    fn overlap_search_keeps_the_global_candidate_range_and_probe_order() {
+        // `previous_end_char` is 60, so the original search may look back 60
+        // characters even if the current main window starts much later.
+        let content = "a".repeat(200);
+        let budget = RecordingTokens::new(30);
+        let reduced = largest_fitting_overlap(&content, 60, 60, &budget, 30);
+        assert_eq!(reduced, Some((31, 30)));
+        assert_eq!(
+            budget.calls.borrow().as_slice(),
+            &[1, 61, 31, 16, 23, 27, 29, 30]
+        );
+    }
+
+    #[test]
+    fn overlap_search_caps_the_candidate_width_at_overlap_chars_plus_one() {
+        let content = "a".repeat(600);
+        let budget = RecordingTokens::new(10);
+        let reduced = largest_fitting_overlap(&content, 500, 500, &budget, 10);
+        let (start, width) = reduced.expect("single characters fit");
+        assert!(width <= OVERLAP_CHARS + 1);
+        assert_eq!(&budget.calls.borrow()[..2], &[1, OVERLAP_CHARS + 1]);
+        assert_eq!(start, 500 + 1 - width);
+    }
+
+    #[test]
+    fn fitting_end_keeps_the_geometric_and_binary_probe_order() {
+        let content = "a".repeat(200);
+        let budget = RecordingTokens::new(30);
+        let mut window = Window::new(&content);
+        window.reset(0);
+        assert_eq!(fitting_end(&mut window, &budget, 30), Some(30));
+        assert_eq!(
+            budget.calls.borrow().as_slice(),
+            &[1, 2, 4, 8, 16, 32, 24, 28, 30, 31]
+        );
+    }
+
+    #[test]
     fn budget_too_small_to_hold_one_character_is_an_error() {
         /// A budget that cannot hold even a single character.
         struct ZeroBudget;
@@ -1015,5 +1561,30 @@ mod tests {
         let err = chunk_content("abc", &ZeroBudget).expect_err("expected an error");
         assert_eq!(err.max_tokens, 0);
         assert_eq!(err.offset, 0);
+    }
+
+    #[test]
+    fn token_budget_too_small_reports_the_absolute_byte_offset() {
+        /// One token per `a`; any `X` costs more than the whole budget.
+        struct ExpensiveX;
+
+        impl TokenBudget for ExpensiveX {
+            fn count_tokens(&self, text: &str) -> usize {
+                if text.chars().all(|ch| ch == 'a') {
+                    text.chars().count()
+                } else {
+                    100
+                }
+            }
+            fn max_tokens(&self) -> usize {
+                2
+            }
+        }
+
+        let content = "aaaX";
+        let err = chunk_content(content, &ExpensiveX).expect_err("expected an error");
+        assert_eq!(err.max_tokens, 2);
+        assert_eq!(err.offset, 3);
+        assert!(content.is_char_boundary(err.offset));
     }
 }
