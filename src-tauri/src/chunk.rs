@@ -512,13 +512,15 @@ fn break_kind_before(content: &str, cut: usize) -> Option<BreakKind> {
 }
 
 /// Number of logical line breaks in the run of `\r`/`\n` bytes ending just
-/// before `end`, counting CRLF as a single break. Two or more means a blank
-/// line, i.e. a paragraph break. `end` is an absolute byte boundary.
+/// before `end`, counting CRLF as a single break and capped at two. The
+/// caller only distinguishes fewer than two from two or more, so the scan
+/// stops as soon as a blank line is proved. `end` is an absolute byte
+/// boundary.
 fn line_break_count(content: &str, end: usize) -> usize {
     let bytes = content.as_bytes();
     let mut count = 0usize;
     let mut i = end;
-    while i > 0 {
+    while i > 0 && count < 2 {
         match bytes[i - 1] {
             b'\n' => {
                 count += 1;
@@ -1482,6 +1484,38 @@ mod tests {
         assert_eq!(chunks[1].start, 550);
         assert_eq!(chunks[1].end, 800);
         assert_valid_and_covered(&content, &CharTokens(670), &chunks);
+    }
+
+    #[test]
+    fn long_line_runs_are_classified_with_a_bounded_scan() {
+        // Beyond the second break the helper must saturate at two. The old
+        // implementation returned the full prefix length at every offset.
+        let lf = "\n".repeat(1_000_000);
+        for end in [2usize, 3, 1_000, 500_000, lf.len()] {
+            assert_eq!(line_break_count(&lf, end), 2, "LF run ending at {end}");
+        }
+
+        let crlf = "\r\n".repeat(500_000);
+        for end in [4usize, 6, 1_000, 500_000, crlf.len()] {
+            assert_eq!(line_break_count(&crlf, end), 2, "CRLF run ending at {end}");
+        }
+
+        // One logical break is still not a paragraph; CRLF counts once.
+        assert_eq!(line_break_count("\n", 1), 1);
+        assert_eq!(line_break_count("\r\n", 2), 1);
+        assert_eq!(line_break_count("\r\n\r\n", 4), 2);
+        assert_eq!(line_break_count("\r\n", 1), 1); // cut between CR and LF
+
+        assert_eq!(
+            break_kind_before(&lf, lf.len()),
+            Some(BreakKind::Paragraph)
+        );
+        assert_eq!(
+            break_kind_before(&crlf, crlf.len()),
+            Some(BreakKind::Paragraph)
+        );
+        assert_eq!(break_kind_before("\n", 1), None);
+        assert_eq!(break_kind_before("\r\n", 2), None);
     }
 
     #[test]
