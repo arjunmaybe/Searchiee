@@ -492,7 +492,7 @@ ul {
 @media (min-width: 900px) {
   .app-header,
   .app-main {
-    max-width: 920px;
+    max-width: 1120px;
     padding-inline: var(--space-6);
   }
 }
