@@ -15,11 +15,15 @@ const queryInput = document.querySelector<HTMLInputElement>("#query")!;
 const resultsEl = document.querySelector<HTMLDivElement>("#results")!;
 const indexBtn = document.querySelector<HTMLButtonElement>("#index-btn")!;
 const noticeEl = document.querySelector<HTMLDivElement>("#notice")!;
-const foldersEl = document.querySelector<HTMLDivElement>("#folders")!;
+const foldersEl = document.querySelector<HTMLUListElement>("#folders")!;
+const foldersMeta = document.querySelector<HTMLParagraphElement>("#folders-meta")!;
+const resultsMeta = document.querySelector<HTMLParagraphElement>("#results-meta")!;
 
 let debounceTimer: ReturnType<typeof setTimeout>;
+let searchRequestId = 0;
 
 queryInput.addEventListener("input", () => {
+  searchRequestId += 1;
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(runSearch, 250);
 });
@@ -50,29 +54,62 @@ async function loadFolders() {
   } catch {
     return;
   }
-  foldersEl.innerHTML = "";
+  foldersEl.replaceChildren();
+  foldersMeta.textContent =
+    folders.length === 0
+      ? "No folders indexed"
+      : formatCount(folders.length, "folder", "folders");
+  foldersMeta.title = foldersMeta.textContent;
+
   for (const folder of folders) {
-    const row = document.createElement("div");
+    const parts = splitPath(folder.path);
+
+    const row = document.createElement("li");
     row.className = "folder-row";
+
+    const identity = document.createElement("div");
+    identity.className = "folder-identity";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "folder-name";
+    nameEl.textContent = parts.name || folder.path;
+    nameEl.title = folder.path;
 
     const pathEl = document.createElement("span");
     pathEl.className = "folder-path";
-    pathEl.textContent = folder.path;
+    pathEl.textContent = parts.parent;
     pathEl.title = folder.path;
+    pathEl.hidden = !parts.parent;
+
+    identity.append(nameEl, pathEl);
 
     const countEl = document.createElement("span");
     countEl.className = "folder-count";
-    countEl.textContent = `${folder.file_count} files`;
+    countEl.textContent = formatCount(folder.file_count, "file", "files");
+
+    const actions = document.createElement("div");
+    actions.className = "folder-actions";
 
     const refreshBtn = document.createElement("button");
+    refreshBtn.type = "button";
+    refreshBtn.className = "button button-secondary";
     refreshBtn.textContent = "Refresh";
-    refreshBtn.addEventListener("click", () => void refreshFolder(folder.path, refreshBtn));
+    refreshBtn.setAttribute("aria-label", `Refresh ${folder.path}`);
+    refreshBtn.addEventListener("click", () =>
+      void refreshFolder(folder.path, refreshBtn),
+    );
 
     const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "button button-danger";
     removeBtn.textContent = "Remove";
-    removeBtn.addEventListener("click", () => void removeFolder(folder.path, removeBtn));
+    removeBtn.setAttribute("aria-label", `Remove ${folder.path} from index`);
+    removeBtn.addEventListener("click", () =>
+      void removeFolder(folder.path, removeBtn),
+    );
 
-    row.append(pathEl, countEl, refreshBtn, removeBtn);
+    actions.append(refreshBtn, removeBtn);
+    row.append(identity, countEl, actions);
     foldersEl.append(row);
   }
 }
@@ -108,37 +145,108 @@ async function removeFolder(path: string, btn: HTMLButtonElement) {
 }
 
 async function runSearch() {
+  const requestId = ++searchRequestId;
   const query = queryInput.value.trim();
   if (!query) {
-    resultsEl.innerHTML = "";
+    resultsEl.replaceChildren();
+    resultsMeta.textContent = "";
+    resultsMeta.title = "";
     return;
   }
 
   const results = await invoke<SearchResult[]>("search", { query });
-  render(results);
+  if (requestId !== searchRequestId) return;
+  render(results, query);
 }
 
-function render(results: SearchResult[]) {
+function render(results: SearchResult[], query: string) {
+  resultsEl.replaceChildren();
+
+  resultsMeta.textContent = `${formatCount(results.length, "result", "results")} for “${query}”`;
+  resultsMeta.title = resultsMeta.textContent;
+
   if (results.length === 0) {
-    resultsEl.innerHTML = `<div class="no-results">No sufficiently relevant results</div>`;
+    const empty = document.createElement("div");
+    empty.className = "empty-state no-results";
+
+    const title = document.createElement("p");
+    title.className = "empty-title";
+    title.textContent = "No sufficiently relevant results";
+
+    empty.append(title);
+    resultsEl.append(empty);
     return;
   }
-  resultsEl.innerHTML = results
-    .map(
-      (r) => `
-      <div class="result">
-        <div class="path">${escapeHtml(r.path)} — ${(r.score * 100).toFixed(1)}%</div>
-        <div class="snippet">${escapeHtml(r.snippet)}</div>
-      </div>
-    `,
-    )
-    .join("");
+
+  for (const result of results) {
+    const parts = splitPath(result.path);
+
+    const article = document.createElement("article");
+    article.className = "result";
+
+    const head = document.createElement("div");
+    head.className = "result-head";
+
+    const identity = document.createElement("div");
+    identity.className = "result-identity";
+
+    const nameEl = document.createElement("h3");
+    nameEl.className = "result-name";
+    nameEl.textContent = parts.name || result.path;
+    nameEl.title = result.path;
+
+    const pathEl = document.createElement("p");
+    pathEl.className = "result-path";
+    pathEl.textContent = parts.parent;
+    pathEl.title = result.path;
+    pathEl.hidden = !parts.parent;
+
+    identity.append(nameEl, pathEl);
+
+    const scoreEl = document.createElement("span");
+    scoreEl.className = "result-score";
+    scoreEl.textContent = `Similarity ${(result.score * 100).toFixed(1)}%`;
+    scoreEl.title = "Cosine similarity";
+
+    head.append(identity, scoreEl);
+
+    const snippetEl = document.createElement("p");
+    snippetEl.className = "result-snippet";
+    snippetEl.textContent = result.snippet;
+
+    article.append(head, snippetEl);
+    resultsEl.append(article);
+  }
 }
 
-function escapeHtml(s: string): string {
-  const div = document.createElement("div");
-  div.textContent = s;
-  return div.innerHTML;
+function splitPath(path: string): { name: string; parent: string } {
+  if (/^[A-Za-z]:[\\/]$/.test(path)) {
+    return { name: path, parent: "" };
+  }
+
+  const normalized = path.replace(/[\\/]+$/, "");
+  const separator = Math.max(
+    normalized.lastIndexOf("\\"),
+    normalized.lastIndexOf("/"),
+  );
+  if (separator < 0) {
+    return { name: normalized || path, parent: "" };
+  }
+  const parent = normalized.slice(0, separator);
+  return {
+    name: normalized.slice(separator + 1),
+    parent: /^[A-Za-z]:$/.test(parent)
+      ? `${parent}${normalized[separator]}`
+      : parent,
+  };
+}
+
+function formatCount(
+  count: number,
+  singular: string,
+  plural: string,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 void (async () => {

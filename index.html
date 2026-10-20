@@ -1,113 +1,75 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
     <title>Searchiee</title>
-    <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-        margin: 0;
-        padding: 24px;
-        background: #111;
-        color: #eee;
-      }
-      #query {
-        width: 100%;
-        padding: 10px 12px;
-        font-size: 16px;
-        border-radius: 8px;
-        border: 1px solid #444;
-        background: #1a1a1a;
-        color: #eee;
-        box-sizing: border-box;
-      }
-      #results {
-        margin-top: 16px;
-      }
-      .result {
-        padding: 10px 0;
-        border-bottom: 1px solid #2a2a2a;
-      }
-      .result .path {
-        font-size: 13px;
-        color: #8ab4f8;
-      }
-      .result .snippet {
-        font-size: 14px;
-        color: #aaa;
-        margin-top: 4px;
-      }
-      .no-results {
-        margin-top: 16px;
-        font-size: 14px;
-        color: #888;
-      }
-      #index-btn {
-        margin-top: 12px;
-        padding: 8px 14px;
-        border-radius: 6px;
-        border: 1px solid #444;
-        background: #222;
-        color: #eee;
-        cursor: pointer;
-      }
-      #notice {
-        margin-top: 12px;
-        padding: 8px 12px;
-        font-size: 13px;
-        border-radius: 6px;
-        border: 1px solid #444;
-        background: #1a1a1a;
-        color: #eee;
-      }
-      #folders {
-        margin-top: 12px;
-      }
-      #folders-hint {
-        margin-top: 12px;
-        font-size: 12px;
-        color: #888;
-      }
-      .folder-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 0;
-        border-bottom: 1px solid #2a2a2a;
-        font-size: 13px;
-      }
-      .folder-path {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        color: #eee;
-      }
-      .folder-count {
-        color: #888;
-        white-space: nowrap;
-      }
-      .folder-row button {
-        padding: 4px 10px;
-        border-radius: 6px;
-        border: 1px solid #444;
-        background: #222;
-        color: #eee;
-        cursor: pointer;
-      }
-    </style>
+    <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <input id="query" type="text" placeholder="Search your indexed files..." />
-    <button id="index-btn">Index a folder</button>
-    <div id="folders"></div>
-    <p id="folders-hint">
-      Results indexed before folder management remain searchable. Add a
-      folder again to refresh or remove its files. Removing a folder only
-      removes its index entries; original files stay on disk.
-    </p>
-    <div id="notice" hidden></div>
-    <div id="results"></div>
+    <header class="app-header">
+      <h1 class="wordmark">Searchiee</h1>
+      <p class="tagline">Local document search</p>
+    </header>
+
+    <main class="app-main">
+      <div id="notice" class="notice" role="status" hidden></div>
+
+      <section class="search-panel" aria-labelledby="search-label">
+        <label id="search-label" class="field-label" for="query">Search</label>
+        <input
+          id="query"
+          type="text"
+          placeholder="Search your indexed files…"
+          autocomplete="off"
+          spellcheck="false"
+          aria-describedby="search-hint"
+        />
+        <p id="search-hint" class="visually-hidden">
+          Search file contents by meaning. Results update as you type.
+        </p>
+      </section>
+
+      <section class="folders-section" aria-labelledby="folders-heading">
+        <div class="section-header">
+          <div class="section-title-group">
+            <h2 id="folders-heading">Indexed folders</h2>
+            <p id="folders-meta" class="section-meta"></p>
+          </div>
+          <button id="index-btn" type="button" class="button button-primary">
+            Index a folder
+          </button>
+        </div>
+
+        <ul id="folders" class="folder-list"></ul>
+
+        <p id="folders-hint" class="folder-note">
+          Results indexed before folder management remain searchable. Add a
+          folder again to refresh or remove its files. Removing a folder only
+          removes its index entries; original files stay on disk.
+        </p>
+      </section>
+
+      <section class="results-section" aria-labelledby="results-heading">
+        <div class="section-header">
+          <div class="section-title-group">
+            <h2 id="results-heading">Results</h2>
+            <p id="results-meta" class="section-meta" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div id="results" class="result-list"></div>
+
+        <div id="results-intro" class="empty-state">
+          <p class="empty-title">Search your indexed folders</p>
+          <p class="empty-copy">
+            Type a phrase to search file contents by meaning.
+          </p>
+        </div>
+      </section>
+    </main>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
