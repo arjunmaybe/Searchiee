@@ -9,8 +9,8 @@ search runs on your machine; nothing is uploaded anywhere.
 ## What you can do
 
 - **Add a folder** ("Index a folder"): scans the folder for supported
-  files, embeds each file locally, and stores the results. The folder is
-  registered so it appears in the folder list afterwards.
+  files, chunks and embeds the text locally, and stores the results. The
+  folder is registered so it appears in the folder list afterwards.
 - **Search**: type a query to semantically search everything indexed, with
   a short snippet and match score per result.
 - **Refresh a registered folder**: re-scans that folder and reconciles
@@ -20,9 +20,15 @@ search runs on your machine; nothing is uploaded anywhere.
   its index entries. Original files on disk are never touched.
 
 Only Markdown (`.md`, any letter case) and plain-text (`.txt`, any letter
-case) files are indexed. Each file gets a single embedding of its full
-content; there is no chunking. Search ranks by cosine similarity and shows
-the top 10 results with a 200-character snippet each.
+case) files are indexed. Long documents are split into overlapping chunks
+sized with the embedding model's own tokenizer, with a 4,096-character
+secondary cap; up to 120 characters of context can overlap between
+neighbouring chunks when the token budget allows. Indexing embeds up to 32
+chunk texts per model call. Search returns one result per file. For chunked
+entries, it ranks each file by its best-matching chunk and shows a snippet
+from that chunk; legacy whole-file entries continue to use their stored
+whole-file vector. Scores below the `0.25` threshold are filtered out, and
+the top 10 results show snippets of up to 200 characters.
 
 ## How indexing stays safe
 
@@ -49,9 +55,10 @@ the top 10 results with a 200-character snippet each.
 ## Folders, persistence, and privacy
 
 - Registered folders and document entries are stored together in one
-  versioned JSON index file, `index-v1.json`, inside Tauri's
-  application-specific local data directory. The file holds folder paths,
-  document paths, document contents, and embedding vectors.
+  versioned JSON index file, `index-v1.json` (currently schema v3), inside
+  Tauri's application-specific local data directory. The file holds folder
+  paths, document paths, document contents, and per-chunk embedding
+  vectors; legacy entries may still carry a whole-file vector.
 - Saves are atomic: the new index is written to a temporary file and
   renamed over the old one, so a failed save never destroys the last good
   index. If saving fails, the app says so and warns the in-memory changes
@@ -61,9 +68,10 @@ the top 10 results with a 200-character snippet each.
   from an empty in-memory index.
 - Deleting `index-v1.json` resets the saved index and requires
   re-indexing. It does not delete your documents.
-- Indexes written by the older schema-v1 format still load: their entries
-  remain searchable, but their folder registry starts empty, so add your
-  folders again to refresh or remove them.
+- Indexes written by older schema-v1 or schema-v2 formats still load
+  without re-embedding. v1 has no folder registry, so add folders again to
+  refresh or remove them; v2's valid folder registrations are preserved,
+  with duplicate or ambiguous paths dropped.
 
 ## Local embeddings and the model cache
 
@@ -126,10 +134,16 @@ cargo check --manifest-path .\src-tauri\Cargo.toml
 npm run build
 ```
 
-The Rust suite (67 tests) covers path identity and root boundaries,
-fail-closed scanning, staged reconciliation, folder registration and
-root-scoped removal, schema-v1/v2 migration, atomic persistence, and
-search-relevance threshold filtering.
+CI reports 168 Rust application tests passed, 0 failed, and 1 ignored; the
+ignored test is the optional model-dependent smoke test. The evaluator
+example has a separate unit-test suite that reports 35 passed. CI compiles
+and unit-tests the evaluator, but does not run the evaluator itself.
+
+The Rust application suite covers path identity and root boundaries,
+fail-closed scanning, chunk planning and token budgets, staged
+reconciliation, chunked search and snippets, folder registration and
+root-scoped removal, schema-v1/v2 compatibility and schema-v3 persistence,
+atomic persistence, and search-relevance threshold filtering.
 
 ## Project layout
 
@@ -137,6 +151,7 @@ search-relevance threshold filtering.
 |---|---|
 | `src/main.ts`, `index.html` | Search UI and registered-folder list |
 | `src-tauri/src/main.rs` | Tauri commands: index, refresh, remove, list, search |
+| `src-tauri/src/chunk.rs` | Deterministic token-budgeted document chunker |
 | `src-tauri/src/watcher.rs` | Fail-closed folder scan (`.md`/`.txt`) |
 | `src-tauri/src/store.rs` | Vector store, folder registry, JSON persistence |
 | `src-tauri/src/embed.rs` | Local FastEmbed pipeline |
@@ -144,6 +159,8 @@ search-relevance threshold filtering.
 ## Limitations
 
 - Only `.md` and `.txt` files are indexed.
-- One embedding per whole file; very long documents are not chunked.
+- Long documents are split into multiple chunk embeddings, so index size
+  grows with the number of chunks; search still returns one result per file
+  using its best-matching chunk.
 - No background watching: changed files appear only after a manual refresh.
 - The minimum cosine-similarity threshold of `0.25` is experimental, not calibrated against a broad labelled evaluation set, and can still admit irrelevant results scoring above the threshold.
