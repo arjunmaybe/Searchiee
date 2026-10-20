@@ -6,7 +6,9 @@ mod embed;
 mod store;
 mod watcher;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Mutex;
 use store::{LoadOutcome, VectorStore};
 use tauri::{Manager, State};
@@ -105,6 +107,36 @@ async fn run_index_pipeline(
     require_registered: bool,
     state: &AppState,
 ) -> Result<usize, String> {
+    let budget = embed::EmbeddingTokenBudget::new();
+    run_index_pipeline_with_embedder(
+        input,
+        require_registered,
+        state,
+        budget,
+        |budget| budget.prepare(),
+        |texts| Box::pin(async move { embed::embed_texts(texts).await.map_err(|e| e.to_string()) }),
+    )
+    .await
+}
+
+/// Testable core of `run_index_pipeline`. The budget and embedder are
+/// injected so deterministic unit tests can exercise the batching and
+/// failure paths without loading or calling the real embedding model.
+async fn run_index_pipeline_with_embedder<B, P, E>(
+    input: &str,
+    require_registered: bool,
+    state: &AppState,
+    mut budget: B,
+    prepare_budget: P,
+    mut embedder: E,
+) -> Result<usize, String>
+where
+    B: chunk::TokenBudget + Send,
+    P: FnOnce(&mut B) -> Result<(), String>,
+    E: FnMut(Vec<String>)
+        -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, String>> + Send>>
+        + Send,
+{
     // Held across validation, scan, embedding, reconciliation, and save.
     // Nothing here is captured before this lock; overlapping calls queue
     // and the later scan always commits last.
@@ -141,16 +173,10 @@ async fn run_index_pipeline(
         .into_iter()
         .map(|doc| (doc.path, doc.content))
         .collect();
-    let ranges = {
-        let budget = embed::EmbeddingTokenBudget::new();
-        // Only prepare (and therefore touch the model) when some document
-        // actually has text; `chunk_content` never consults the budget for
-        // empty content, so an all-empty scan stays model-free.
-        if docs.iter().any(|(_, content)| !content.is_empty()) {
-            budget.prepare()?;
-        }
-        plan_chunk_ranges(&docs, &budget).map_err(|e| e.to_string())?
-    };
+    if docs.iter().any(|(_, content)| !content.is_empty()) {
+        prepare_budget(&mut budget)?;
+    }
+    let ranges = plan_chunk_ranges(&docs, &budget).map_err(|e| e.to_string())?;
     let owners = chunk_owners(&ranges);
 
     // Embed every chunk in bounded batches. A single failing batch aborts
@@ -164,7 +190,7 @@ async fn run_index_pipeline(
                 chunk::chunk_text(&docs[doc_index].1, &ranges[doc_index][range_index]).to_string()
             })
             .collect();
-        let mut embedded = embed::embed_texts(texts).await.map_err(|e| e.to_string())?;
+        let mut embedded = embedder(texts).await.map_err(|e| e.to_string())?;
         if embedded.len() != batch.len() {
             return Err(format!(
                 "embedding model returned {} vectors for {} chunk texts",
@@ -602,6 +628,202 @@ mod tests {
                 assert_eq!(chunk.end, ranges[doc_index][chunk_index].end);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn later_embedding_batch_failure_leaves_existing_state_unchanged() {
+        let temp = std::env::temp_dir().join(format!(
+            "searchiee-greptile-failure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let docs_dir = temp.join("docs");
+        let index_path = temp.join("index.json");
+        let existing_root = temp.join("existing");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::create_dir_all(&existing_root).unwrap();
+        for i in 0..40 {
+            std::fs::write(docs_dir.join(format!("{i}.txt")), format!("doc {i}")).unwrap();
+        }
+        std::fs::write(existing_root.join("old.txt"), "old").unwrap();
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(
+                &existing_root,
+                &existing_root.to_string_lossy(),
+                vec![store::StagedDoc {
+                    path: existing_root.join("old.txt").to_string_lossy().to_string(),
+                    content: "old".to_string(),
+                    vector: fake_vector(),
+                    chunks: Vec::new(),
+                }],
+            )
+            .expect("seed reconcile");
+        store.save_to_path(&index_path).expect("seed save");
+
+        let before_count = store.entry_count();
+        let before_folders = store.registered_folders();
+        let before_serialized = store.serialize().expect("serialize before");
+        let before_bytes = std::fs::read(&index_path).expect("read before");
+        assert_eq!(before_count, 1, "seeded baseline should have one entry");
+        assert_eq!(
+            before_folders.len(),
+            1,
+            "seeded baseline should have one registered folder"
+        );
+        let state = AppState {
+            store: Mutex::new(store),
+            save_lock: Mutex::new(()),
+            index_op_lock: tokio::sync::Mutex::new(()),
+            index_path: Some(index_path.clone()),
+            startup_notice: Mutex::new(None),
+        };
+
+        let mut calls = 0usize;
+        let embedder = |texts: Vec<String>| -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, String>> + Send>> {
+            calls += 1;
+            match calls {
+                1 => {
+                    assert_eq!(texts.len(), embed::EMBED_BATCH_SIZE, "first batch size");
+                    Box::pin(std::future::ready(Ok(vec![fake_vector(); texts.len()])))
+                }
+                2 => {
+                    assert_eq!(texts.len(), 8, "second batch size");
+                    Box::pin(std::future::ready(Err("simulated batch 2 failure".to_string())))
+                }
+                unexpected => panic!("unexpected extra embedding batch call: {unexpected}"),
+            }
+        };
+
+        let result = run_index_pipeline_with_embedder(
+            docs_dir.to_str().unwrap(),
+            false,
+            &state,
+            CharTokens(800),
+            |_| Ok(()),
+            embedder,
+        )
+        .await;
+
+        assert!(result.is_err(), "indexing should fail on the second batch");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("simulated batch 2 failure"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(calls, 2, "expected exactly two embedding batches");
+
+        let store = state.store.lock().expect("store lock");
+        assert_eq!(store.entry_count(), before_count);
+        assert_eq!(store.registered_folders(), before_folders);
+        assert_eq!(store.serialize().expect("serialize after"), before_serialized);
+        assert_eq!(
+            std::fs::read(&index_path).expect("read after"),
+            before_bytes
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn short_embedding_response_is_rejected_without_state_change() {
+        let temp = std::env::temp_dir().join(format!(
+            "searchiee-greptile-short-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let docs_dir = temp.join("docs");
+        let index_path = temp.join("index.json");
+        let existing_root = temp.join("existing");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::create_dir_all(&existing_root).unwrap();
+        for i in 0..40 {
+            std::fs::write(docs_dir.join(format!("{i}.txt")), format!("doc {i}")).unwrap();
+        }
+        std::fs::write(existing_root.join("old.txt"), "old").unwrap();
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(
+                &existing_root,
+                &existing_root.to_string_lossy(),
+                vec![store::StagedDoc {
+                    path: existing_root.join("old.txt").to_string_lossy().to_string(),
+                    content: "old".to_string(),
+                    vector: fake_vector(),
+                    chunks: Vec::new(),
+                }],
+            )
+            .expect("seed reconcile");
+        store.save_to_path(&index_path).expect("seed save");
+
+        let before_count = store.entry_count();
+        let before_folders = store.registered_folders();
+        let before_serialized = store.serialize().expect("serialize before");
+        let before_bytes = std::fs::read(&index_path).expect("read before");
+        assert_eq!(before_count, 1, "seeded baseline should have one entry");
+        assert_eq!(
+            before_folders.len(),
+            1,
+            "seeded baseline should have one registered folder"
+        );
+        let state = AppState {
+            store: Mutex::new(store),
+            save_lock: Mutex::new(()),
+            index_op_lock: tokio::sync::Mutex::new(()),
+            index_path: Some(index_path.clone()),
+            startup_notice: Mutex::new(None),
+        };
+
+        let mut calls = 0usize;
+        let embedder = |texts: Vec<String>| -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, String>> + Send>> {
+            calls += 1;
+            match calls {
+                1 => {
+                    assert_eq!(texts.len(), embed::EMBED_BATCH_SIZE, "first batch size");
+                    Box::pin(std::future::ready(Ok(vec![fake_vector(); texts.len()])))
+                }
+                2 => {
+                    assert_eq!(texts.len(), 8, "second batch size");
+                    Box::pin(std::future::ready(Ok(Vec::new())))
+                }
+                unexpected => panic!("unexpected extra embedding batch call: {unexpected}"),
+            }
+        };
+
+        let result = run_index_pipeline_with_embedder(
+            docs_dir.to_str().unwrap(),
+            false,
+            &state,
+            CharTokens(800),
+            |_| Ok(()),
+            embedder,
+        )
+        .await;
+
+        assert!(result.is_err(), "indexing should fail on a short vector response");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("embedding model returned 0 vectors for 8 chunk texts"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(calls, 2, "expected exactly two embedding batches");
+
+        let store = state.store.lock().expect("store lock");
+        assert_eq!(store.entry_count(), before_count);
+        assert_eq!(store.registered_folders(), before_folders);
+        assert_eq!(store.serialize().expect("serialize after"), before_serialized);
+        assert_eq!(
+            std::fs::read(&index_path).expect("read after"),
+            before_bytes
+        );
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
