@@ -20,8 +20,10 @@ const foldersMeta = document.querySelector<HTMLParagraphElement>("#folders-meta"
 const resultsMeta = document.querySelector<HTMLParagraphElement>("#results-meta")!;
 
 let debounceTimer: ReturnType<typeof setTimeout>;
+let searchRequestId = 0;
 
 queryInput.addEventListener("input", () => {
+  searchRequestId += 1;
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(runSearch, 250);
 });
@@ -53,11 +55,10 @@ async function loadFolders() {
     return;
   }
   foldersEl.replaceChildren();
-  const totalFiles = folders.reduce((total, folder) => total + folder.file_count, 0);
   foldersMeta.textContent =
     folders.length === 0
       ? "No folders indexed"
-      : `${formatCount(folders.length, "folder", "folders")} · ${formatCount(totalFiles, "file", "files")}`;
+      : formatCount(folders.length, "folder", "folders");
   foldersMeta.title = foldersMeta.textContent;
 
   for (const folder of folders) {
@@ -144,6 +145,7 @@ async function removeFolder(path: string, btn: HTMLButtonElement) {
 }
 
 async function runSearch() {
+  const requestId = ++searchRequestId;
   const query = queryInput.value.trim();
   if (!query) {
     resultsEl.replaceChildren();
@@ -153,13 +155,13 @@ async function runSearch() {
   }
 
   const results = await invoke<SearchResult[]>("search", { query });
-  render(results);
+  if (requestId !== searchRequestId) return;
+  render(results, query);
 }
 
-function render(results: SearchResult[]) {
+function render(results: SearchResult[], query: string) {
   resultsEl.replaceChildren();
 
-  const query = queryInput.value.trim();
   resultsMeta.textContent = `${formatCount(results.length, "result", "results")} for “${query}”`;
   resultsMeta.title = resultsMeta.textContent;
 
