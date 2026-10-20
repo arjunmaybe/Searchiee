@@ -1,14 +1,30 @@
 // Entry point. Wires the file watcher, embedding pipeline, and vector
 // store together, and exposes a couple of commands to the frontend.
 
+mod chunk;
 mod embed;
 mod store;
 mod watcher;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Mutex;
 use store::{LoadOutcome, VectorStore};
 use tauri::{Manager, State};
+
+/// Size the chunker with the embedding model's real tokenizer. This impl
+/// lives here rather than in `embed.rs` so that the `evaluate_relevance`
+/// example can compile the embedder without also compiling the chunker.
+impl chunk::TokenBudget for embed::EmbeddingTokenBudget {
+    fn count_tokens(&self, text: &str) -> usize {
+        embed::EmbeddingTokenBudget::count_tokens(self, text)
+    }
+
+    fn max_tokens(&self) -> usize {
+        embed::EmbeddingTokenBudget::max_tokens(self)
+    }
+}
 
 struct AppState {
     store: Mutex<VectorStore>,
@@ -91,6 +107,36 @@ async fn run_index_pipeline(
     require_registered: bool,
     state: &AppState,
 ) -> Result<usize, String> {
+    let budget = embed::EmbeddingTokenBudget::new();
+    run_index_pipeline_with_embedder(
+        input,
+        require_registered,
+        state,
+        budget,
+        |budget| budget.prepare(),
+        |texts| Box::pin(async move { embed::embed_texts(texts).await.map_err(|e| e.to_string()) }),
+    )
+    .await
+}
+
+/// Testable core of `run_index_pipeline`. The budget and embedder are
+/// injected so deterministic unit tests can exercise the batching and
+/// failure paths without loading or calling the real embedding model.
+async fn run_index_pipeline_with_embedder<B, P, E>(
+    input: &str,
+    require_registered: bool,
+    state: &AppState,
+    mut budget: B,
+    prepare_budget: P,
+    mut embedder: E,
+) -> Result<usize, String>
+where
+    B: chunk::TokenBudget + Send,
+    P: FnOnce(&mut B) -> Result<(), String>,
+    E: FnMut(Vec<String>)
+        -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, String>> + Send>>
+        + Send,
+{
     // Held across validation, scan, embedding, reconciliation, and save.
     // Nothing here is captured before this lock; overlapping calls queue
     // and the later scan always commits last.
@@ -118,15 +164,44 @@ async fn run_index_pipeline(
             scan.root.display()
         ));
     }
-    let mut staged: Vec<store::StagedDoc> = Vec::with_capacity(scan.docs.len());
-    for doc in scan.docs {
-        let vector = embed::embed_text(&doc.content).await.map_err(|e| e.to_string())?;
-        staged.push(store::StagedDoc {
-            path: doc.path,
-            content: doc.content,
-            vector,
-        });
+    // Plan chunks for every document. Sizing is token-based: the budget
+    // comes from the embedding model's own tokenizer, so no chunk can be
+    // silently truncated. The model is only touched (and downloaded) if
+    // there is text to chunk; an empty scan needs no model.
+    let docs: Vec<(String, String)> = scan
+        .docs
+        .into_iter()
+        .map(|doc| (doc.path, doc.content))
+        .collect();
+    if docs.iter().any(|(_, content)| !content.is_empty()) {
+        prepare_budget(&mut budget)?;
     }
+    let ranges = plan_chunk_ranges(&docs, &budget).map_err(|e| e.to_string())?;
+    let owners = chunk_owners(&ranges);
+
+    // Embed every chunk in bounded batches. A single failing batch aborts
+    // the whole pass here, before `staged` exists and before the store is
+    // touched, so no folder — related or unrelated — is modified.
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(owners.len());
+    for batch in owners.chunks(embed::EMBED_BATCH_SIZE) {
+        let texts: Vec<String> = batch
+            .iter()
+            .map(|&(doc_index, range_index)| {
+                chunk::chunk_text(&docs[doc_index].1, &ranges[doc_index][range_index]).to_string()
+            })
+            .collect();
+        let mut embedded = embedder(texts).await.map_err(|e| e.to_string())?;
+        if embedded.len() != batch.len() {
+            return Err(format!(
+                "embedding model returned {} vectors for {} chunk texts",
+                embedded.len(),
+                batch.len()
+            ));
+        }
+        vectors.append(&mut embedded);
+    }
+
+    let staged = assemble_staged(docs, ranges, vectors)?;
     let staged_len = staged.len();
 
     // Serialize saves through `save_lock` so concurrent index passes
@@ -165,6 +240,72 @@ async fn run_index_pipeline(
             "Indexed {staged_len} files in memory, but saving the persistent index failed: {e}. Results will work until the app restarts."
         )),
     }
+}
+
+/// One ordered list of chunk byte-ranges per document. Deterministic
+/// given `budget`; empty content yields an empty list. Fails only if the
+/// budget cannot hold even a single character of some document.
+fn plan_chunk_ranges(
+    docs: &[(String, String)],
+    budget: &dyn chunk::TokenBudget,
+) -> Result<Vec<Vec<chunk::Chunk>>, chunk::TokenBudgetTooSmall> {
+    docs.iter()
+        .map(|(_, content)| chunk::chunk_content(content, budget))
+        .collect()
+}
+
+/// Flattened `(document index, range index)` owners, in document order,
+/// describing which chunk each embedding position belongs to.
+fn chunk_owners(ranges: &[Vec<chunk::Chunk>]) -> Vec<(usize, usize)> {
+    let mut owners = Vec::new();
+    for (doc_index, doc_ranges) in ranges.iter().enumerate() {
+        for range_index in 0..doc_ranges.len() {
+            owners.push((doc_index, range_index));
+        }
+    }
+    owners
+}
+
+/// Pair each chunk's byte range with its embedding, preserving the exact
+/// UTF-8 offsets produced by the chunker. A zero-length document has no
+/// ranges and no embeddings and stages as an empty, counted-but-not-
+/// searchable entry. A vector-count mismatch is rejected rather than
+/// misaligning offsets.
+fn assemble_staged(
+    docs: Vec<(String, String)>,
+    ranges: Vec<Vec<chunk::Chunk>>,
+    vectors: Vec<Vec<f32>>,
+) -> Result<Vec<store::StagedDoc>, String> {
+    let expected: usize = ranges.iter().map(|r| r.len()).sum();
+    if vectors.len() != expected {
+        return Err(format!(
+            "internal error: {} chunk embeddings for {} chunks",
+            vectors.len(),
+            expected
+        ));
+    }
+    let mut vectors = vectors.into_iter();
+    let mut staged = Vec::with_capacity(docs.len());
+    for ((path, content), doc_ranges) in docs.into_iter().zip(ranges) {
+        let mut chunks = Vec::with_capacity(doc_ranges.len());
+        for range in doc_ranges {
+            let vector = vectors
+                .next()
+                .ok_or_else(|| format!("internal error: missing chunk embedding for {path}"))?;
+            chunks.push(store::StoredChunk {
+                start: range.start,
+                end: range.end,
+                vector,
+            });
+        }
+        staged.push(store::StagedDoc {
+            path,
+            content,
+            vector: Vec::new(),
+            chunks,
+        });
+    }
+    Ok(staged)
 }
 
 #[tauri::command]
@@ -320,6 +461,25 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// Token budget charging one token per Unicode scalar, so planning
+    /// tests never initialize (or download) the embedding model. The
+    /// 800-token budget matches the chunker's previous character cap.
+    struct CharTokens(usize);
+
+    impl chunk::TokenBudget for CharTokens {
+        fn count_tokens(&self, text: &str) -> usize {
+            text.chars().count()
+        }
+        fn max_tokens(&self) -> usize {
+            self.0
+        }
+    }
+
+    /// Standard budget for the pipeline tests below.
+    fn plan_ranges(docs: &[(String, String)]) -> Vec<Vec<chunk::Chunk>> {
+        plan_chunk_ranges(docs, &CharTokens(800)).expect("chunk planning should succeed")
+    }
+
     #[test]
     fn derives_legacy_path_for_expected_identifier() {
         let new = PathBuf::from(
@@ -341,5 +501,474 @@ mod tests {
     fn rejects_paths_without_parent_structure() {
         assert_eq!(legacy_index_path(Path::new("index-v1.json")), None);
         assert_eq!(legacy_index_path(Path::new("D:\\index-v1.json")), None);
+    }
+
+    /// Deterministic stand-in for a real embedding so unit tests never
+    /// load or call the model.
+    fn fake_vector() -> Vec<f32> {
+        vec![1.0; store::INDEX_DIM]
+    }
+
+    /// Distinct, finite `INDEX_DIM` marker for one `(document, chunk)`
+    /// owner, so a test can trace each assembled chunk back to the exact
+    /// owner whose text it was embedded from.
+    fn marker_vector(doc_index: usize, chunk_index: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; store::INDEX_DIM];
+        vector[0] = 1.0;
+        vector[1] = (doc_index + 1) as f32;
+        vector[2] = (chunk_index + 1) as f32;
+        vector
+    }
+
+    #[test]
+    fn empty_content_stages_no_chunks() {
+        let docs = vec![(r"D:\Docs\empty.txt".to_string(), String::new())];
+        let ranges = plan_ranges(&docs);
+        assert!(ranges[0].is_empty());
+        let staged = assemble_staged(docs, ranges, Vec::new()).expect("assemble");
+        assert_eq!(staged.len(), 1);
+        assert!(staged[0].vector.is_empty());
+        assert!(staged[0].chunks.is_empty());
+    }
+
+    #[test]
+    fn chunk_offsets_match_content_and_chunker() {
+        let content = format!("{}\n\n{}", "A".repeat(500), "B".repeat(1500));
+        let docs = vec![(r"D:\Docs\a.txt".to_string(), content.clone())];
+        let ranges = plan_ranges(&docs);
+        let owners = chunk_owners(&ranges);
+        let vectors = vec![fake_vector(); owners.len()];
+        let staged = assemble_staged(docs, ranges.clone(), vectors).expect("assemble");
+
+        let doc = &staged[0];
+        assert!(doc.vector.is_empty());
+        assert!(doc.chunks.len() > 1);
+        assert_eq!(doc.chunks.len(), ranges[0].len());
+        for (chunk, range) in doc.chunks.iter().zip(&ranges[0]) {
+            assert_eq!(chunk.start, range.start);
+            assert_eq!(chunk.end, range.end);
+            assert!(content.is_char_boundary(chunk.start));
+            assert!(content.is_char_boundary(chunk.end));
+            assert_eq!(
+                &content[chunk.start..chunk.end],
+                chunk::chunk_text(&content, range)
+            );
+        }
+        assert_eq!(doc.chunks[0].start, 0);
+        assert_eq!(doc.chunks.last().unwrap().end, content.len());
+    }
+
+    #[test]
+    fn incorrect_embedding_counts_are_rejected() {
+        let docs = vec![(r"D:\Docs\a.txt".to_string(), "hello world".to_string())];
+        let ranges = plan_ranges(&docs);
+        assert_eq!(ranges[0].len(), 1);
+        let err = assemble_staged(docs, ranges, Vec::new())
+            .err()
+            .expect("expected a count mismatch error");
+        assert!(err.contains("chunk embeddings"));
+    }
+
+    #[test]
+    fn chunk_ownership_is_complete_across_batches() {
+        // 40 single-chunk documents -> 40 owners, split into two batches at 32.
+        let docs: Vec<(String, String)> = (0..40)
+            .map(|i| (format!(r"D:\Docs\{i}.txt"), format!("doc {i}")))
+            .collect();
+        let ranges = plan_ranges(&docs);
+        let owners = chunk_owners(&ranges);
+        assert_eq!(owners.len(), 40);
+        assert_eq!(owners.chunks(embed::EMBED_BATCH_SIZE).count(), 2);
+        // Every position maps back to exactly one (doc, range) pair.
+        for (position, &(doc_index, range_index)) in owners.iter().enumerate() {
+            assert_eq!(doc_index, position);
+            assert_eq!(range_index, 0);
+        }
+    }
+
+    #[test]
+    fn chunk_markers_survive_a_batch_boundary_across_documents() {
+        // The first document is long enough to span more than one
+        // embedding batch, so the batch boundary at owner position
+        // EMBED_BATCH_SIZE falls inside its chunk list rather than
+        // aligning with a document edge. The second document is a short
+        // tail that begins mid-batch.
+        let docs = vec![
+            (r"D:\Docs\long.txt".to_string(), "x".repeat(25_000)),
+            (r"D:\Docs\short.txt".to_string(), "second document".to_string()),
+        ];
+        let ranges = plan_ranges(&docs);
+        assert!(ranges[0].len() > embed::EMBED_BATCH_SIZE);
+        assert_eq!(ranges[1].len(), 1);
+
+        let owners = chunk_owners(&ranges);
+        assert_eq!(owners.len(), ranges[0].len() + ranges[1].len());
+        // The boundary position belongs to the first document.
+        assert!(embed::EMBED_BATCH_SIZE < ranges[0].len());
+        assert_eq!(owners[embed::EMBED_BATCH_SIZE], (0, embed::EMBED_BATCH_SIZE));
+
+        // Assign a distinct marker per (document, chunk) in owner order,
+        // feeding them through the same bounded batching the pipeline
+        // uses, without loading the model.
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(owners.len());
+        for batch in owners.chunks(embed::EMBED_BATCH_SIZE) {
+            for &(doc_index, chunk_index) in batch {
+                vectors.push(marker_vector(doc_index, chunk_index));
+            }
+        }
+        assert_eq!(vectors.len(), owners.len());
+
+        let staged = assemble_staged(docs, ranges.clone(), vectors).expect("assemble");
+        assert_eq!(staged.len(), 2);
+        for (doc_index, doc) in staged.iter().enumerate() {
+            assert_eq!(doc.chunks.len(), ranges[doc_index].len());
+            for (chunk_index, chunk) in doc.chunks.iter().enumerate() {
+                assert_eq!(chunk.vector, marker_vector(doc_index, chunk_index));
+                assert_eq!(chunk.start, ranges[doc_index][chunk_index].start);
+                assert_eq!(chunk.end, ranges[doc_index][chunk_index].end);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn later_embedding_batch_failure_leaves_existing_state_unchanged() {
+        let temp = std::env::temp_dir().join(format!(
+            "searchiee-greptile-failure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let docs_dir = temp.join("docs");
+        let index_path = temp.join("index.json");
+        let existing_root = temp.join("existing");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::create_dir_all(&existing_root).unwrap();
+        for i in 0..40 {
+            std::fs::write(docs_dir.join(format!("{i}.txt")), format!("doc {i}")).unwrap();
+        }
+        std::fs::write(existing_root.join("old.txt"), "old").unwrap();
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(
+                &existing_root,
+                &existing_root.to_string_lossy(),
+                vec![store::StagedDoc {
+                    path: existing_root.join("old.txt").to_string_lossy().to_string(),
+                    content: "old".to_string(),
+                    vector: fake_vector(),
+                    chunks: Vec::new(),
+                }],
+            )
+            .expect("seed reconcile");
+        store.save_to_path(&index_path).expect("seed save");
+
+        let before_count = store.entry_count();
+        let before_folders = store.registered_folders();
+        let before_serialized = store.serialize().expect("serialize before");
+        let before_bytes = std::fs::read(&index_path).expect("read before");
+        assert_eq!(before_count, 1, "seeded baseline should have one entry");
+        assert_eq!(
+            before_folders.len(),
+            1,
+            "seeded baseline should have one registered folder"
+        );
+        let state = AppState {
+            store: Mutex::new(store),
+            save_lock: Mutex::new(()),
+            index_op_lock: tokio::sync::Mutex::new(()),
+            index_path: Some(index_path.clone()),
+            startup_notice: Mutex::new(None),
+        };
+
+        let mut calls = 0usize;
+        let embedder = |texts: Vec<String>| -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, String>> + Send>> {
+            calls += 1;
+            match calls {
+                1 => {
+                    assert_eq!(texts.len(), embed::EMBED_BATCH_SIZE, "first batch size");
+                    Box::pin(std::future::ready(Ok(vec![fake_vector(); texts.len()])))
+                }
+                2 => {
+                    assert_eq!(texts.len(), 8, "second batch size");
+                    Box::pin(std::future::ready(Err("simulated batch 2 failure".to_string())))
+                }
+                unexpected => panic!("unexpected extra embedding batch call: {unexpected}"),
+            }
+        };
+
+        let result = run_index_pipeline_with_embedder(
+            docs_dir.to_str().unwrap(),
+            false,
+            &state,
+            CharTokens(800),
+            |_| Ok(()),
+            embedder,
+        )
+        .await;
+
+        assert!(result.is_err(), "indexing should fail on the second batch");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("simulated batch 2 failure"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(calls, 2, "expected exactly two embedding batches");
+
+        let store = state.store.lock().expect("store lock");
+        assert_eq!(store.entry_count(), before_count);
+        assert_eq!(store.registered_folders(), before_folders);
+        assert_eq!(store.serialize().expect("serialize after"), before_serialized);
+        assert_eq!(
+            std::fs::read(&index_path).expect("read after"),
+            before_bytes
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn short_embedding_response_is_rejected_without_state_change() {
+        let temp = std::env::temp_dir().join(format!(
+            "searchiee-greptile-short-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let docs_dir = temp.join("docs");
+        let index_path = temp.join("index.json");
+        let existing_root = temp.join("existing");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::create_dir_all(&existing_root).unwrap();
+        for i in 0..40 {
+            std::fs::write(docs_dir.join(format!("{i}.txt")), format!("doc {i}")).unwrap();
+        }
+        std::fs::write(existing_root.join("old.txt"), "old").unwrap();
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(
+                &existing_root,
+                &existing_root.to_string_lossy(),
+                vec![store::StagedDoc {
+                    path: existing_root.join("old.txt").to_string_lossy().to_string(),
+                    content: "old".to_string(),
+                    vector: fake_vector(),
+                    chunks: Vec::new(),
+                }],
+            )
+            .expect("seed reconcile");
+        store.save_to_path(&index_path).expect("seed save");
+
+        let before_count = store.entry_count();
+        let before_folders = store.registered_folders();
+        let before_serialized = store.serialize().expect("serialize before");
+        let before_bytes = std::fs::read(&index_path).expect("read before");
+        assert_eq!(before_count, 1, "seeded baseline should have one entry");
+        assert_eq!(
+            before_folders.len(),
+            1,
+            "seeded baseline should have one registered folder"
+        );
+        let state = AppState {
+            store: Mutex::new(store),
+            save_lock: Mutex::new(()),
+            index_op_lock: tokio::sync::Mutex::new(()),
+            index_path: Some(index_path.clone()),
+            startup_notice: Mutex::new(None),
+        };
+
+        let mut calls = 0usize;
+        let embedder = |texts: Vec<String>| -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, String>> + Send>> {
+            calls += 1;
+            match calls {
+                1 => {
+                    assert_eq!(texts.len(), embed::EMBED_BATCH_SIZE, "first batch size");
+                    Box::pin(std::future::ready(Ok(vec![fake_vector(); texts.len()])))
+                }
+                2 => {
+                    assert_eq!(texts.len(), 8, "second batch size");
+                    Box::pin(std::future::ready(Ok(Vec::new())))
+                }
+                unexpected => panic!("unexpected extra embedding batch call: {unexpected}"),
+            }
+        };
+
+        let result = run_index_pipeline_with_embedder(
+            docs_dir.to_str().unwrap(),
+            false,
+            &state,
+            CharTokens(800),
+            |_| Ok(()),
+            embedder,
+        )
+        .await;
+
+        assert!(result.is_err(), "indexing should fail on a short vector response");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("embedding model returned 0 vectors for 8 chunk texts"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(calls, 2, "expected exactly two embedding batches");
+
+        let store = state.store.lock().expect("store lock");
+        assert_eq!(store.entry_count(), before_count);
+        assert_eq!(store.registered_folders(), before_folders);
+        assert_eq!(store.serialize().expect("serialize after"), before_serialized);
+        assert_eq!(
+            std::fs::read(&index_path).expect("read after"),
+            before_bytes
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn staged_chunks_reconcile_and_are_searchable_above_threshold() {
+        let content = format!("{}\n\n{}", "A".repeat(500), "B".repeat(1500));
+        let docs = vec![(r"D:\Docs\a.txt".to_string(), content)];
+        let ranges = plan_ranges(&docs);
+        let owners = chunk_owners(&ranges);
+        let vectors = vec![fake_vector(); owners.len()];
+        let staged = assemble_staged(docs, ranges, vectors).expect("assemble");
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(&PathBuf::from(r"D:\Docs"), r"D:\Docs", staged)
+            .expect("reconcile");
+        assert_eq!(store.entry_count(), 1);
+        // Unit query vs unit chunk vectors scores 1.0, above the 0.25 floor.
+        let hits = store.search(&fake_vector(), 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, r"D:\Docs\a.txt");
+    }
+
+    #[test]
+    fn empty_documents_remain_counted_but_not_searchable() {
+        let docs = vec![(r"D:\Docs\empty.txt".to_string(), String::new())];
+        let ranges = plan_ranges(&docs);
+        let staged = assemble_staged(docs, ranges, Vec::new()).expect("assemble");
+
+        let mut store = store::VectorStore::new();
+        store
+            .reconcile_and_register(&PathBuf::from(r"D:\Docs"), r"D:\Docs", staged)
+            .expect("reconcile");
+        assert_eq!(store.entry_count(), 1);
+        assert!(store.search(&fake_vector(), 10).is_empty());
+    }
+
+    /// Opt-in smoke test against the real FastEmbed tokenizer.
+    ///
+    /// Ordinary tests stay model-free; this one is `#[ignore]`d and must be
+    /// run explicitly:
+    ///
+    /// ```text
+    /// cargo test --bin searchiee embedding_token_budget_matches_the_model -- --ignored --nocapture
+    /// ```
+    ///
+    /// It is forced offline. hf-hub 0.5.0's `ApiRepo::get` is cache-first
+    /// (a cached file is returned without any request), and only a cache
+    /// miss reaches the network. `HF_ENDPOINT` is pinned to a closed
+    /// loopback port so a miss fails fast instead of downloading, and the
+    /// cache is pinned to this crate's existing `.fastembed_cache`. If the
+    /// assets are absent the test fails; it never downloads.
+    #[test]
+    #[ignore = "loads the cached FastEmbed model; run explicitly with --ignored"]
+    fn embedding_token_budget_matches_the_model() {
+        std::env::set_var("HF_ENDPOINT", "http://127.0.0.1:9");
+        std::env::remove_var("HF_HOME");
+        std::env::set_var(
+            "FASTEMBED_CACHE_DIR",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/.fastembed_cache"),
+        );
+
+        let budget = embed::EmbeddingTokenBudget::new();
+        budget
+            .prepare()
+            .expect("the cached FastEmbed model assets are required");
+
+        let limit = budget.max_tokens();
+        println!("configured token limit: {limit}");
+
+        // Deterministic, token-dense text: punctuation, accented Latin,
+        // CJK, Cyrillic, Arabic and digits. The repeats make this many
+        // times longer than the limit, so a truncating tokenizer cannot
+        // report its full length.
+        let unit =
+            "The quick brown fox; 你好，世界！Привет, мир! مرحبا بالعالم café/naïve—résumé? 1234567890. ";
+        let repeats = limit.clamp(64, 512);
+        let text = unit.repeat(repeats);
+        let full = budget.count_tokens(&text);
+        println!(
+            "sample: {} bytes / {} chars, {full} untruncated tokens",
+            text.len(),
+            text.chars().count()
+        );
+        assert!(
+            full > limit,
+            "sample must exceed the limit (count {full} <= limit {limit})"
+        );
+
+        let chunks =
+            chunk::chunk_content(&text, &budget).expect("the real budget must chunk the sample");
+        assert!(
+            chunks.len() > 1,
+            "oversized text must split into more than one chunk"
+        );
+
+        let mut covered = vec![false; text.len()];
+        let mut previous_end = 0usize;
+        for (index, chunk) in chunks.iter().enumerate() {
+            assert!(chunk.start < chunk.end, "chunk {index} is empty");
+            assert!(chunk.start <= previous_end, "chunk {index} leaves a gap");
+            assert!(chunk.end > previous_end, "chunk {index} does not advance");
+            assert!(
+                text.is_char_boundary(chunk.start),
+                "chunk {index} start is not a UTF-8 boundary"
+            );
+            assert!(
+                text.is_char_boundary(chunk.end),
+                "chunk {index} end is not a UTF-8 boundary"
+            );
+
+            let slice = &text[chunk.start..chunk.end];
+            for flag in &mut covered[chunk.start..chunk.end] {
+                *flag = true;
+            }
+            previous_end = chunk.end;
+
+            let counted = budget.count_tokens(slice);
+            assert!(
+                counted <= limit,
+                "chunk {index} needs {counted} tokens, above the limit {limit}"
+            );
+
+            // Within the limit the model's own tokenizer cannot truncate, so
+            // its encoding length must equal the untruncated count. This is
+            // the check that the clone and the real tokenizer agree exactly
+            // where the model is actually used.
+            let model = embed::model_for_test().lock().expect("embedding model lock");
+            let encoded = model
+                .tokenizer
+                .encode(slice, true)
+                .expect("model tokenizer failed to encode a chunk")
+                .len();
+            assert_eq!(
+                encoded, counted,
+                "chunk {index}: model encoding length {encoded} != untruncated count {counted}"
+            );
+        }
+
+        assert!(
+            covered.iter().all(|&byte| byte),
+            "every byte must be covered by some chunk"
+        );
+        println!(
+            "ok: {} chunks, all within {limit} tokens and fully covered",
+            chunks.len()
+        );
     }
 }

@@ -5,8 +5,10 @@
 //
 // The on-disk format is a versioned JSON envelope holding each
 // entry's path, content, and embedding plus the embedding model id
-// and dimension. It lives in the app-specific Local AppData directory
-// as `index-v1.json` and contains full document contents.
+// and dimension. Entries carry either a whole-file vector (legacy
+// v1/v2 indexes and the current whole-file indexing pipeline) or chunk
+// vectors, never both. It lives in the app-specific Local AppData
+// directory as `index-v1.json` and contains full document contents.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -16,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const INDEX_SCHEMA_VERSION: u32 = 2;
+pub const INDEX_SCHEMA_VERSION: u32 = 3;
 /// Stable identifier for the current local embedding model
 /// (`fastembed::EmbeddingModel::AllMiniLML6V2`).
 pub const INDEX_MODEL_ID: &str = "all-MiniLM-L6-v2";
@@ -30,14 +32,38 @@ pub const INDEX_DIM: usize = 384;
 /// general — treat this as a starting point to tune with real usage.
 pub const MIN_RELEVANCE_SCORE: f32 = 0.25;
 pub const INDEX_FILE_NAME: &str = "index-v1.json";
+/// Maximum Unicode characters retained in a search snippet.
+const SNIPPET_CHARS: usize = 200;
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Serialize, Deserialize)]
+/// One embedded span of a document. `start`/`end` are byte offsets into
+/// the owning entry's exact `content`; both must fall on UTF-8 character
+/// boundaries and `start < end`. Chunk ranges must cover the whole
+/// content with no gaps and strictly advancing ends; neighboring ranges
+/// may overlap.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct StoredChunk {
+    pub start: usize,
+    pub end: usize,
+    pub vector: Vec<f32>,
+}
+
+/// Mutually exclusive embedding source for an entry. A whole-file vector
+/// and a chunk list can never coexist, and `Empty` is valid only for
+/// zero-length content.
+#[derive(Clone, Debug, PartialEq)]
+enum Embedding {
+    Whole(Vec<f32>),
+    Chunks(Vec<StoredChunk>),
+    Empty,
+}
+
+#[derive(Clone, Debug)]
 struct Entry {
     path: String,
     content: String,
-    vector: Vec<f32>,
+    embedding: Embedding,
 }
 
 pub struct VectorStore {
@@ -60,11 +86,13 @@ pub struct SearchResult {
 
 /// Staged indexing result: scan output plus its embedding. Applied to
 /// the live store only via `reconcile` after the full scan+embed pass
-/// succeeds.
+/// succeeds. A staged document provides either `vector` or `chunks`,
+/// never both; both empty is only valid for empty content.
 pub struct StagedDoc {
     pub path: String,
     pub content: String,
     pub vector: Vec<f32>,
+    pub chunks: Vec<StoredChunk>,
 }
 
 /// Normalized identity for an absolute Windows path, or `None` when the
@@ -192,7 +220,10 @@ fn paths_match(a: &str, b: &str) -> bool {
 struct SavedEntry {
     path: String,
     content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     vector: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    chunks: Vec<StoredChunk>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -353,24 +384,30 @@ impl VectorStore {
     /// never match anything and are preserved as distinct entries.
     #[allow(dead_code)]
     pub fn insert(&mut self, path: String, content: String, vector: Vec<f32>) {
+        let embedding = if vector.is_empty() {
+            Embedding::Empty
+        } else {
+            Embedding::Whole(vector)
+        };
         if let Some(existing) = self
             .entries
             .iter_mut()
             .find(|e| paths_match(&e.path, &path))
         {
             existing.content = content;
-            existing.vector = vector;
+            existing.embedding = embedding;
             existing.path = path;
         } else {
-            self.entries.push(Entry { path, content, vector });
+            self.entries.push(Entry { path, content, embedding });
         }
     }
 
     /// Atomically reconcile the selected absolute root with a completely
     /// staged set: upsert every staged doc by normalized identity, then
     /// drop in-root entries absent from the staged set. Unrelated roots
-    /// and ambiguous legacy entries are always retained. Validates all
-    /// keys before mutating, so an ambiguous root or staged path aborts
+    /// and ambiguous legacy entries are always retained. Validates every
+    /// staged key and embedding before mutating, so an ambiguous root,
+    /// ambiguous staged path, or malformed staged embedding aborts
     /// without changing the store.
     pub fn reconcile(&mut self, root: &Path, staged: Vec<StagedDoc>) -> Result<usize, String> {
         let root_key = path_key(&root.to_string_lossy()).ok_or_else(|| {
@@ -380,7 +417,8 @@ impl VectorStore {
             )
         })?;
         let mut staged_keys: HashSet<String> = HashSet::with_capacity(staged.len());
-        let mut staged_with_keys: Vec<(String, StagedDoc)> = Vec::with_capacity(staged.len());
+        let mut staged_with_keys: Vec<(String, StagedDoc, Embedding)> =
+            Vec::with_capacity(staged.len());
         for doc in staged {
             let key = path_key(&doc.path).ok_or_else(|| {
                 format!(
@@ -388,22 +426,23 @@ impl VectorStore {
                     doc.path
                 )
             })?;
+            let embedding = staged_embedding(&doc)?;
             staged_keys.insert(key.clone());
-            staged_with_keys.push((key, doc));
+            staged_with_keys.push((key, doc, embedding));
         }
-        for (key, doc) in staged_with_keys {
+        for (key, doc, embedding) in staged_with_keys {
             if let Some(existing) = self.entries.iter_mut().find(|e| match path_key(&e.path) {
                 Some(existing_key) => existing_key == key,
                 None => false,
             }) {
                 existing.content = doc.content;
-                existing.vector = doc.vector;
+                existing.embedding = embedding;
                 existing.path = doc.path;
             } else {
                 self.entries.push(Entry {
                     path: doc.path,
                     content: doc.content,
-                    vector: doc.vector,
+                    embedding,
                 });
             }
         }
@@ -430,22 +469,53 @@ impl VectorStore {
         Ok(staged_keys.len())
     }
 
+    /// One result per file. Whole-file entries keep their head snippet;
+    /// chunk entries use the highest finite chunk score and a snippet
+    /// bounded to that winning chunk. Non-finite scores are excluded,
+    /// which also keeps the `partial_cmp` sort below from ever seeing
+    /// NaN. Empty entries are never searchable.
     pub fn search(&self, query_vector: &[f32], limit: usize) -> Vec<SearchResult> {
-        let mut scored: Vec<SearchResult> = self
-            .entries
-            .iter()
-            .map(|e| SearchResult {
-                path: e.path.clone(),
-                snippet: snippet(&e.content),
-                score: cosine_similarity(query_vector, &e.vector),
-            })
+        let mut scored: Vec<SearchResult> = Vec::new();
+        for e in &self.entries {
+            let hit: Option<(String, f32)> = match &e.embedding {
+                Embedding::Empty => None,
+                Embedding::Whole(vector) => {
+                    Some((snippet(&e.content), cosine_similarity(query_vector, vector)))
+                }
+                Embedding::Chunks(chunks) => {
+                    let mut best: Option<(f32, &StoredChunk)> = None;
+                    for c in chunks {
+                        let score = cosine_similarity(query_vector, &c.vector);
+                        // Strict `>` keeps the earliest chunk on ties; chunk
+                        // ranges are validated to advance deterministically.
+                        if score.is_finite() && best.map_or(true, |(b, _)| score > b) {
+                            best = Some((score, c));
+                        }
+                    }
+                    best.map(|(score, c)| (chunk_snippet(&e.content, c), score))
+                }
+            };
             // Drop weak matches before the limit so they never consume
-            // result slots. Non-finite scores are excluded too, which also
-            // keeps the `partial_cmp` sort below from ever seeing NaN.
-            .filter(|r| r.score.is_finite() && r.score >= MIN_RELEVANCE_SCORE)
-            .collect();
+            // result slots.
+            if let Some((snippet, score)) = hit {
+                if score.is_finite() && score >= MIN_RELEVANCE_SCORE {
+                    scored.push(SearchResult {
+                        path: e.path.clone(),
+                        snippet,
+                        score,
+                    });
+                }
+            }
+        }
 
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        // Deterministic order: highest score first, then normalized path
+        // identity, with a raw-path fallback for ambiguous paths.
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap()
+                .then_with(|| tie_key(&a.path).cmp(&tie_key(&b.path)))
+        });
         scored.truncate(limit);
         scored
     }
@@ -459,10 +529,25 @@ impl VectorStore {
             entries: self
                 .entries
                 .iter()
-                .map(|e| SavedEntry {
-                    path: e.path.clone(),
-                    content: e.content.clone(),
-                    vector: e.vector.clone(),
+                .map(|e| match &e.embedding {
+                    Embedding::Whole(vector) => SavedEntry {
+                        path: e.path.clone(),
+                        content: e.content.clone(),
+                        vector: vector.clone(),
+                        chunks: Vec::new(),
+                    },
+                    Embedding::Chunks(chunks) => SavedEntry {
+                        path: e.path.clone(),
+                        content: e.content.clone(),
+                        vector: Vec::new(),
+                        chunks: chunks.clone(),
+                    },
+                    Embedding::Empty => SavedEntry {
+                        path: e.path.clone(),
+                        content: e.content.clone(),
+                        vector: Vec::new(),
+                        chunks: Vec::new(),
+                    },
                 })
                 .collect(),
             folders: self.folders.clone(),
@@ -473,11 +558,13 @@ impl VectorStore {
     /// Validate a parsed envelope and convert it. v1 envelopes (no
     /// folders field) load entries with an empty registry. v2 envelopes
     /// load entries strictly and sanitize duplicate or ambiguous folder
-    /// paths without discarding valid entries. Anything else quarantines.
+    /// paths without discarding valid entries. v3 envelopes additionally
+    /// accept chunk-only and empty entries; legacy entries may not carry
+    /// chunk data. Anything else quarantines.
     fn from_saved(saved: SavedIndex) -> Result<Self, String> {
-        if saved.version != 1 && saved.version != INDEX_SCHEMA_VERSION {
+        if saved.version != 1 && saved.version != 2 && saved.version != INDEX_SCHEMA_VERSION {
             return Err(format!(
-                "unsupported index version {} (expected {})",
+                "unsupported index version {} (expected 1, 2, or {})",
                 saved.version, INDEX_SCHEMA_VERSION
             ));
         }
@@ -493,25 +580,56 @@ impl VectorStore {
                 saved.dim
             ));
         }
+        let legacy = saved.version == 1 || saved.version == 2;
         let mut store = VectorStore::new();
         for e in saved.entries {
             if e.path.is_empty() {
                 return Err("index entry has an empty path".to_string());
             }
-            if e.vector.len() != INDEX_DIM {
-                return Err(format!(
-                    "entry '{}' has dimension {} (expected {INDEX_DIM})",
-                    e.path,
-                    e.vector.len()
-                ));
-            }
-            if !e.vector.iter().all(|v| v.is_finite()) {
-                return Err(format!("entry '{}' has a non-finite embedding value", e.path));
-            }
+            let embedding = if legacy {
+                // Legacy entries always carry a valid whole-file vector and
+                // never carry chunk data.
+                if !e.chunks.is_empty() {
+                    return Err(format!(
+                        "legacy entry '{}' contains chunk data",
+                        e.path
+                    ));
+                }
+                validate_whole_vector(&e.vector, &e.path)?;
+                Embedding::Whole(e.vector)
+            } else {
+                match (e.vector.is_empty(), e.chunks.is_empty()) {
+                    (false, false) => {
+                        return Err(format!(
+                            "entry '{}' has both a whole-file vector and chunks",
+                            e.path
+                        ));
+                    }
+                    (false, true) => {
+                        validate_whole_vector(&e.vector, &e.path)?;
+                        Embedding::Whole(e.vector)
+                    }
+                    (true, false) => {
+                        validate_chunks(&e.content, &e.chunks)
+                            .map_err(|reason| format!("entry '{}': {reason}", e.path))?;
+                        Embedding::Chunks(e.chunks)
+                    }
+                    (true, true) => {
+                        if e.content.is_empty() {
+                            Embedding::Empty
+                        } else {
+                            return Err(format!(
+                                "entry '{}' has no embedding but non-empty content",
+                                e.path
+                            ));
+                        }
+                    }
+                }
+            };
             store.entries.push(Entry {
                 path: e.path,
                 content: e.content,
-                vector: e.vector,
+                embedding,
             });
         }
         if saved.version == 1 {
@@ -801,8 +919,153 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a * norm_b)
 }
 
+/// Whole-file vectors are always exactly `INDEX_DIM` finite values.
+fn validate_whole_vector(vector: &[f32], path: &str) -> Result<(), String> {
+    if vector.len() != INDEX_DIM {
+        return Err(format!(
+            "entry '{path}' has dimension {} (expected {INDEX_DIM})",
+            vector.len()
+        ));
+    }
+    if !vector.iter().all(|v| v.is_finite()) {
+        return Err(format!("entry '{path}' has a non-finite embedding value"));
+    }
+    Ok(())
+}
+
+/// Chunk ranges must be UTF-8-safe, cover the whole content with no gaps,
+/// and have strictly advancing starts and ends. Neighboring ranges may
+/// still overlap as long as `current.start <= previous.end`.
+fn validate_chunks(content: &str, chunks: &[StoredChunk]) -> Result<(), String> {
+    if chunks.is_empty() {
+        return Err("chunk list is empty".to_string());
+    }
+    if chunks[0].start != 0 {
+        return Err("chunks do not cover the start of the content".to_string());
+    }
+    if chunks[chunks.len() - 1].end != content.len() {
+        return Err("chunks do not cover the end of the content".to_string());
+    }
+    let mut last_end: Option<usize> = None;
+    let mut last_start: Option<usize> = None;
+    for c in chunks {
+        if c.start >= c.end {
+            return Err(format!(
+                "chunk range {}..{} must satisfy start < end",
+                c.start, c.end
+            ));
+        }
+        if c.end > content.len() {
+            return Err(format!(
+                "chunk range {}..{} exceeds content length {}",
+                c.start,
+                c.end,
+                content.len()
+            ));
+        }
+        if !content.is_char_boundary(c.start) || !content.is_char_boundary(c.end) {
+            return Err(format!(
+                "chunk range {}..{} is not on UTF-8 character boundaries",
+                c.start, c.end
+            ));
+        }
+        if c.vector.len() != INDEX_DIM {
+            return Err(format!(
+                "chunk at {}..{} has dimension {} (expected {INDEX_DIM})",
+                c.start,
+                c.end,
+                c.vector.len()
+            ));
+        }
+        if !c.vector.iter().all(|v| v.is_finite()) {
+            return Err(format!(
+                "chunk at {}..{} has a non-finite embedding value",
+                c.start, c.end
+            ));
+        }
+        if let Some(prev_end) = last_end {
+            if c.end <= prev_end {
+                return Err(format!(
+                    "chunk ends must strictly advance (chunk ending at {} after {})",
+                    c.end, prev_end
+                ));
+            }
+            if c.start > prev_end {
+                return Err(format!(
+                    "gap between chunks (chunk starting at {} after {})",
+                    c.start, prev_end
+                ));
+            }
+            if let Some(prev_start) = last_start {
+                if c.start <= prev_start {
+                    return Err(format!(
+                        "chunk starts must strictly increase (chunk starting at {} after {})",
+                        c.start, prev_start
+                    ));
+                }
+            }
+        }
+        last_end = Some(c.end);
+        last_start = Some(c.start);
+    }
+    Ok(())
+}
+
+/// Convert a staged document into the mutually exclusive in-memory
+/// embedding, rejecting a non-empty document with no embedding and a
+/// document that supplies both a whole-file vector and chunks. Chunk
+/// ranges are validated completely here, before any store mutation.
+fn staged_embedding(doc: &StagedDoc) -> Result<Embedding, String> {
+    match (doc.vector.is_empty(), doc.chunks.is_empty()) {
+        (false, true) => {
+            validate_whole_vector(&doc.vector, &doc.path)
+                .map_err(|reason| format!("scanned file '{}': {reason}", doc.path))?;
+            Ok(Embedding::Whole(doc.vector.clone()))
+        }
+        (true, false) => {
+            validate_chunks(&doc.content, &doc.chunks)
+                .map_err(|reason| format!("scanned file '{}': {reason}", doc.path))?;
+            Ok(Embedding::Chunks(doc.chunks.clone()))
+        }
+        (true, true) => {
+            if doc.content.is_empty() {
+                Ok(Embedding::Empty)
+            } else {
+                Err(format!(
+                    "scanned file '{}' has no embedding but non-empty content; refusing to reconcile",
+                    doc.path
+                ))
+            }
+        }
+        (false, false) => Err(format!(
+            "scanned file '{}' has both a whole-file vector and chunks; refusing to reconcile",
+            doc.path
+        )),
+    }
+}
+
+/// Sort key for equal-scoring results: normalized path identity first,
+/// with a raw-path fallback for ambiguous paths.
+fn tie_key(path: &str) -> (u8, String) {
+    match path_key(path) {
+        Some(key) => (0, key),
+        None => (1, path.to_string()),
+    }
+}
+
 fn snippet(content: &str) -> String {
-    content.chars().take(200).collect()
+    content.chars().take(SNIPPET_CHARS).collect()
+}
+
+/// Snippet bounded to the winning chunk's range, then capped at
+/// `SNIPPET_CHARS` Unicode characters.
+fn chunk_snippet(content: &str, chunk: &StoredChunk) -> String {
+    let start = chunk.start.min(content.len());
+    let end = chunk.end.min(content.len());
+    if start >= end || !content.is_char_boundary(start) || !content.is_char_boundary(end) {
+        return snippet(content);
+    }
+    content[start..end].chars().take(SNIPPET_CHARS).collect()
 }
 
 // TODO next: this re-scores every document on every query, which is
@@ -881,7 +1144,7 @@ mod tests {
 
         assert_eq!(store.entries.len(), 1);
         assert_eq!(store.entries[0].content, "new");
-        assert_eq!(store.entries[0].vector, vec![0.0, 1.0]);
+        assert_eq!(whole_vector(&store.entries[0]), vec![0.0, 1.0]);
     }
 
     #[test]
@@ -950,7 +1213,7 @@ mod tests {
         assert_eq!(loaded.entries.len(), 2);
         let entry = loaded.entries.iter().find(|e| e.path == "a.txt").expect("a.txt");
         assert_eq!(entry.content, "v2");
-        assert_eq!(entry.vector, vec384(2.0));
+        assert_eq!(whole_vector(entry), vec384(2.0));
     }
 
     #[test]
@@ -976,7 +1239,7 @@ mod tests {
         );
         assert_eq!(restarted.entries.len(), 1);
         assert_eq!(restarted.entries[0].content, "hello updated");
-        assert_eq!(restarted.entries[0].vector, vec384(5.0));
+        assert_eq!(whole_vector(&restarted.entries[0]), vec384(5.0));
     }
 
     #[test]
@@ -1167,6 +1430,61 @@ mod tests {
             path: path.to_string(),
             content: content.to_string(),
             vector: vec384(fill),
+            chunks: Vec::new(),
+        }
+    }
+
+    fn chunk(start: usize, end: usize, fill: f32) -> StoredChunk {
+        StoredChunk {
+            start,
+            end,
+            vector: vec384(fill),
+        }
+    }
+
+    fn chunk_with(start: usize, end: usize, vector: Vec<f32>) -> StoredChunk {
+        StoredChunk { start, end, vector }
+    }
+
+    fn chunked_staged(path: &str, content: &str, chunks: Vec<StoredChunk>) -> StagedDoc {
+        StagedDoc {
+            path: path.to_string(),
+            content: content.to_string(),
+            vector: Vec::new(),
+            chunks,
+        }
+    }
+
+    fn empty_staged(path: &str, content: &str) -> StagedDoc {
+        StagedDoc {
+            path: path.to_string(),
+            content: content.to_string(),
+            vector: Vec::new(),
+            chunks: Vec::new(),
+        }
+    }
+
+    /// Extract the whole-file vector of a test entry, panicking for any
+    /// other representation.
+    fn whole_vector(entry: &Entry) -> Vec<f32> {
+        match &entry.embedding {
+            Embedding::Whole(vector) => vector.clone(),
+            other => panic!("expected whole-file embedding, got {other:?}"),
+        }
+    }
+
+    fn chunks_of(entry: &Entry) -> Vec<StoredChunk> {
+        match &entry.embedding {
+            Embedding::Chunks(chunks) => chunks.clone(),
+            other => panic!("expected chunk embedding, got {other:?}"),
+        }
+    }
+
+    fn chunked_entry(path: &str, content: &str, chunks: Vec<StoredChunk>) -> Entry {
+        Entry {
+            path: path.to_string(),
+            content: content.to_string(),
+            embedding: Embedding::Chunks(chunks),
         }
     }
 
@@ -1191,7 +1509,7 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(store.entries.len(), 1);
         assert_eq!(store.entries[0].content, "v2");
-        assert_eq!(store.entries[0].vector, vec384(2.0));
+        assert_eq!(whole_vector(&store.entries[0]), vec384(2.0));
     }
 
     #[test]
@@ -1203,18 +1521,18 @@ mod tests {
         store.entries.push(Entry {
             path: "D:\\Docs\\Note.md".to_string(),
             content: "stale one".to_string(),
-            vector: vec384(1.0),
+            embedding: Embedding::Whole(vec384(1.0)),
         });
         store.entries.push(Entry {
             path: "d:/docs/note.md".to_string(),
             content: "stale two".to_string(),
-            vector: vec384(1.0),
+            embedding: Embedding::Whole(vec384(1.0)),
         });
         // An unrelated entry must survive untouched.
         store.entries.push(Entry {
             path: "E:\\Other\\keep.txt".to_string(),
             content: "keep".to_string(),
-            vector: vec384(7.0),
+            embedding: Embedding::Whole(vec384(7.0)),
         });
         assert_eq!(store.entries.len(), 3);
         store
@@ -1230,7 +1548,7 @@ mod tests {
             .collect();
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].content, "fresh");
-        assert_eq!(matching[0].vector, vec384(4.0));
+        assert_eq!(whole_vector(matching[0]), vec384(4.0));
         assert_eq!(matching[0].path, "D:\\DOCS\\NOTE.md");
         assert_eq!(store.entries.len(), 2);
         assert!(store.entries.iter().any(|e| e.path == "E:\\Other\\keep.txt"));
@@ -1288,7 +1606,7 @@ mod tests {
             .find(|e| e.path == "E:\\Other\\b.txt")
             .expect("other retained");
         assert_eq!(other.content, "b");
-        assert_eq!(other.vector, vec384(2.0));
+        assert_eq!(whole_vector(other), vec384(2.0));
     }
 
     #[test]
@@ -1488,7 +1806,7 @@ mod tests {
         store.entries.push(Entry {
             path: "docs\\legacy.txt".to_string(),
             content: "legacy".to_string(),
-            vector: vec384(9.0),
+            embedding: Embedding::Whole(vec384(9.0)),
         });
         store.insert(
             "D:\\Docs\\a.txt".to_string(),
@@ -1862,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_index_upgrades_to_v2_on_next_save() {
+    fn v1_index_upgrades_to_v3_on_next_save() {
         let dir = test_dir("v1upgrade");
         let dest = dir.join(INDEX_FILE_NAME);
         let v1 = serde_json::json!({
@@ -1881,7 +2199,7 @@ mod tests {
         loaded.save_to_path(&dest).expect("save");
         let raw = std::fs::read_to_string(&dest).expect("read back");
         let saved: serde_json::Value = serde_json::from_str(&raw).expect("parse");
-        assert_eq!(saved["version"], serde_json::Value::from(2));
+        assert_eq!(saved["version"], serde_json::Value::from(3));
         assert_eq!(saved["entries"].as_array().expect("entries").len(), 1);
         assert_eq!(
             saved["entries"][0]["path"],
@@ -1956,6 +2274,33 @@ mod tests {
             std::fs::create_dir_all(parent).expect("parent dir");
         }
         std::fs::write(dest, serde_json::to_string(&value).unwrap()).expect("seed index");
+    }
+
+    /// Seed a v3 envelope with an arbitrary `entries` array so loader
+    /// validation paths can be exercised directly.
+    fn seed_v3_index(dest: &Path, entries: serde_json::Value) {
+        let value = serde_json::json!({
+            "version": 3,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": entries,
+        });
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).expect("parent dir");
+        }
+        std::fs::write(dest, serde_json::to_string(&value).unwrap()).expect("seed v3 index");
+    }
+
+    fn chunk_json(start: usize, end: usize, vector: Vec<f32>) -> serde_json::Value {
+        serde_json::json!({ "start": start, "end": end, "vector": vector })
+    }
+
+    fn assert_quarantined(dest: &Path, dir: &Path) {
+        match VectorStore::load_from_path(dest).expect("load") {
+            LoadOutcome::Quarantined { store, .. } => assert_eq!(store.entry_count(), 0),
+            other => panic!("expected Quarantined, got {}", outcome_name(&other)),
+        }
+        assert_eq!(corrupt_files_in(dir).len(), 1);
     }
 
     #[test]
@@ -2176,12 +2521,12 @@ mod tests {
         store.entries.push(Entry {
             path: "nan.txt".to_string(),
             content: "nan".to_string(),
-            vector: vec![f32::NAN, 0.0],
+            embedding: Embedding::Whole(vec![f32::NAN, 0.0]),
         });
         store.entries.push(Entry {
             path: "inf.txt".to_string(),
             content: "inf".to_string(),
-            vector: vec![f32::INFINITY, 0.0],
+            embedding: Embedding::Whole(vec![f32::INFINITY, 0.0]),
         });
         store.insert("ok.txt".to_string(), "ok".to_string(), vec![1.0, 0.0]);
         let results = store.search(&[1.0, 0.0], 10);
@@ -2196,6 +2541,937 @@ mod tests {
         let mut store = VectorStore::new();
         store.insert("weak.txt".to_string(), "weak".to_string(), vec![0.0, 1.0]);
         assert!(store.search(&[1.0, 0.0], 10).is_empty());
+    }
+
+    // --- Schema v3 legacy migration and searchability --------------------
+
+    #[test]
+    fn legacy_v1_entries_remain_searchable_without_reembedding() {
+        let dir = test_dir("v1search");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_index(&dest, 1, None);
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert_eq!(whole_vector(&loaded.entries[0]), vec384(1.0));
+        let results = loaded.search(&vec384(1.0), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "D:\\Docs\\a.txt");
+    }
+
+    #[test]
+    fn legacy_v2_entries_remain_searchable_with_sanitized_registry() {
+        let dir = test_dir("v2search");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let v2 = serde_json::json!({
+            "version": 2,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [{ "path": "D:\\Docs\\a.txt", "content": "x", "vector": vec384(1.0) }],
+            "folders": ["D:\\Docs", "d:/docs\\", "rel\\Docs", "", "E:\\Other"]
+        });
+        std::fs::write(&dest, serde_json::to_string(&v2).unwrap()).expect("seed v2");
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert_eq!(whole_vector(&loaded.entries[0]), vec384(1.0));
+        assert_eq!(loaded.search(&vec384(1.0), 10).len(), 1);
+    }
+
+    #[test]
+    fn legacy_entries_with_chunk_data_quarantine() {
+        let dir = test_dir("v2chunks");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let value = serde_json::json!({
+            "version": 2,
+            "model": INDEX_MODEL_ID,
+            "dim": INDEX_DIM,
+            "entries": [{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "vector": vec384(1.0),
+                "chunks": [chunk_json(0, 6, vec384(1.0))]
+            }],
+            "folders": []
+        });
+        std::fs::write(&dest, serde_json::to_string(&value).unwrap()).expect("seed v2");
+        assert_quarantined(&dest, &dir);
+    }
+
+    // --- Schema v3 round trips ------------------------------------------
+
+    #[test]
+    fn v3_whole_entry_round_trips_with_vector_only() {
+        let dir = test_dir("v3whole");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let mut store = VectorStore::new();
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("D:\\Docs\\a.txt", "hello world", 1.0)],
+            )
+            .expect("reconcile");
+        store.save_to_path(&dest).expect("save");
+
+        let raw = std::fs::read_to_string(&dest).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+        assert_eq!(value["version"], serde_json::Value::from(3));
+        assert!(value["entries"][0].get("chunks").is_none());
+
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(whole_vector(&loaded.entries[0]), vec384(1.0));
+        let results = loaded.search(&vec384(1.0), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet, "hello world");
+    }
+
+    #[test]
+    fn v3_chunked_entry_round_trips_with_chunks_only() {
+        let dir = test_dir("v3chunks");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let mut store = VectorStore::new();
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![chunked_staged(
+                    "D:\\Docs\\a.txt",
+                    "abcdef",
+                    vec![chunk(0, 3, 1.0), chunk(3, 6, 0.5)],
+                )],
+            )
+            .expect("reconcile");
+        assert_eq!(
+            chunks_of(&store.entries[0]),
+            vec![chunk(0, 3, 1.0), chunk(3, 6, 0.5)]
+        );
+        store.save_to_path(&dest).expect("save");
+
+        let raw = std::fs::read_to_string(&dest).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+        assert_eq!(value["version"], serde_json::Value::from(3));
+        assert!(value["entries"][0].get("vector").is_none());
+        assert_eq!(
+            value["entries"][0]["chunks"].as_array().map(|a| a.len()),
+            Some(2)
+        );
+
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(
+            chunks_of(&loaded.entries[0]),
+            vec![chunk(0, 3, 1.0), chunk(3, 6, 0.5)]
+        );
+        let results = loaded.search(&vec384(1.0), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet, "abc");
+    }
+
+    #[test]
+    fn v3_empty_entry_round_trips_without_embedding() {
+        let dir = test_dir("v3empty");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![empty_staged("D:\\Docs\\empty.txt", "")],
+            )
+            .expect("reconcile");
+        assert_eq!(store.entry_count(), 1);
+        store.save_to_path(&dest).expect("save");
+
+        let raw = std::fs::read_to_string(&dest).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+        assert!(value["entries"][0].get("vector").is_none());
+        assert!(value["entries"][0].get("chunks").is_none());
+
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert!(matches!(loaded.entries[0].embedding, Embedding::Empty));
+        assert_eq!(loaded.list_folders()[0].file_count, 1);
+        assert!(loaded.search(&vec384(1.0), 10).is_empty());
+    }
+
+    // --- Mutually exclusive representation validation -------------------
+
+    #[test]
+    fn v3_entry_with_both_representations_quarantines() {
+        let dir = test_dir("v3both");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "vector": vec384(1.0),
+                "chunks": [chunk_json(0, 6, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_nonempty_entry_without_embedding_quarantines() {
+        let dir = test_dir("v3nembed");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{ "path": "D:\\Docs\\a.txt", "content": "abcdef" }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_empty_entry_without_embedding_loads_as_empty() {
+        let dir = test_dir("v3emptyload");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{ "path": "D:\\Docs\\a.txt", "content": "" }]),
+        );
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert!(matches!(loaded.entries[0].embedding, Embedding::Empty));
+    }
+
+    // --- Malformed chunk ranges and vectors ------------------------------
+
+    #[test]
+    fn v3_chunk_start_not_before_end_quarantines() {
+        let dir = test_dir("v3startend");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 6, vec384(1.0)), chunk_json(6, 6, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_range_beyond_content_quarantines() {
+        let dir = test_dir("v3beyond");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 9, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_gap_quarantines() {
+        let dir = test_dir("v3gap");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 2, vec384(1.0)), chunk_json(4, 6, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_nested_or_unordered_quarantines() {
+        let dir = test_dir("v3nested");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 4, vec384(1.0)), chunk_json(1, 3, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_missing_start_coverage_quarantines() {
+        let dir = test_dir("v3nostart");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(1, 6, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_missing_end_coverage_quarantines() {
+        let dir = test_dir("v3noend");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 5, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_duplicate_chunk_starts_quarantine() {
+        let dir = test_dir("v3dupstart");
+        let dest = dir.join(INDEX_FILE_NAME);
+        // Ends strictly advance and coverage is complete, but the second
+        // chunk restarts at the same offset as the first.
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 5, vec384(1.0)), chunk_json(0, 6, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_descending_chunk_starts_quarantine() {
+        let dir = test_dir("v3descstart");
+        let dest = dir.join(INDEX_FILE_NAME);
+        // Ends advance (2, 4, 6) and there are no gaps, but the third
+        // chunk starts before the second.
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [
+                    chunk_json(0, 2, vec384(1.0)),
+                    chunk_json(1, 4, vec384(1.0)),
+                    chunk_json(0, 6, vec384(1.0))
+                ]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_non_char_boundary_quarantines() {
+        let dir = test_dir("v3boundary");
+        let dest = dir.join(INDEX_FILE_NAME);
+        // "aéz" is 4 bytes; byte offset 2 falls inside the 2-byte 'é'.
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "aéz",
+                "chunks": [chunk_json(0, 2, vec384(1.0)), chunk_json(2, 4, vec384(1.0))]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_dimension_mismatch_quarantines() {
+        let dir = test_dir("v3dim");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [chunk_json(0, 6, vec![1.0, 0.0])]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    #[test]
+    fn v3_chunk_non_finite_vector_quarantines() {
+        let dir = test_dir("v3nonfinite");
+        let dest = dir.join(INDEX_FILE_NAME);
+        // A finite JSON number (1e39) overflows f32 on load, yielding
+        // infinity that the finite-value check must reject.
+        let mut bad: Vec<f64> = vec![1.0; INDEX_DIM];
+        bad[0] = 1.0e39;
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [{ "start": 0, "end": 6, "vector": bad }]
+            }]),
+        );
+        assert_quarantined(&dest, &dir);
+    }
+
+    // --- Valid chunk layouts load ---------------------------------------
+
+    #[test]
+    fn v3_overlapping_chunk_ranges_load() {
+        let dir = test_dir("v3overlap");
+        let dest = dir.join(INDEX_FILE_NAME);
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [
+                    chunk_json(0, 4, vec384(1.0)),
+                    chunk_json(2, 6, vec384(0.5))
+                ]
+            }]),
+        );
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(chunks_of(&loaded.entries[0]).len(), 2);
+    }
+
+    #[test]
+    fn v3_overlapping_chunks_with_increasing_starts_load() {
+        let dir = test_dir("v3overlap3");
+        let dest = dir.join(INDEX_FILE_NAME);
+        // Three overlapping ranges: starts 0, 2, 4 strictly increase and
+        // ends 4, 5, 6 strictly advance, so the layout is valid.
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "abcdef",
+                "chunks": [
+                    chunk_json(0, 4, vec384(1.0)),
+                    chunk_json(2, 5, vec384(0.75)),
+                    chunk_json(4, 6, vec384(0.5))
+                ]
+            }]),
+        );
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(chunks_of(&loaded.entries[0]).len(), 3);
+    }
+
+    #[test]
+    fn v3_multibyte_chunk_boundaries_load() {
+        let dir = test_dir("v3multi");
+        let dest = dir.join(INDEX_FILE_NAME);
+        // "aé" is 3 bytes: 'a' at 0, 'é' at 1..3.
+        seed_v3_index(
+            &dest,
+            serde_json::json!([{
+                "path": "D:\\Docs\\a.txt",
+                "content": "aé",
+                "chunks": [
+                    chunk_json(0, 1, vec384(1.0)),
+                    chunk_json(1, 3, vec384(0.5))
+                ]
+            }]),
+        );
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(chunks_of(&loaded.entries[0])[1].end, 3);
+    }
+
+    // --- Staged validation is atomic ------------------------------------
+
+    #[test]
+    fn reconcile_rejects_malformed_staged_chunks_without_mutation() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\keep.txt".to_string(), "keep".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let result = store.reconcile(
+            &root("D:\\Docs"),
+            vec![chunked_staged(
+                "D:\\Docs\\bad.txt",
+                "abcdef",
+                vec![chunk(0, 2, 1.0), chunk(4, 6, 1.0)],
+            )],
+        );
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+    }
+
+    #[test]
+    fn reconcile_rejects_staged_nonfinite_chunk_vector_without_mutation() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\keep.txt".to_string(), "keep".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let mut bad = vec384(1.0);
+        bad[0] = f32::NAN;
+        let result = store.reconcile(
+            &root("D:\\Docs"),
+            vec![chunked_staged(
+                "D:\\Docs\\bad.txt",
+                "abcdef",
+                vec![chunk_with(0, 6, bad)],
+            )],
+        );
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+    }
+
+    #[test]
+    fn reconcile_rejects_staged_wrong_dimension_whole_vector_without_mutation() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\keep.txt".to_string(), "keep".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let mut bad = staged("D:\\Docs\\bad.txt", "abcdef", 1.0);
+        bad.vector = vec![1.0; INDEX_DIM - 1];
+        let result = store.reconcile(&root("D:\\Docs"), vec![bad]);
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+    }
+
+    #[test]
+    fn reconcile_rejects_staged_nonfinite_whole_vector_without_mutation() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut store = VectorStore::new();
+            store.insert("D:\\Docs\\keep.txt".to_string(), "keep".to_string(), vec384(1.0));
+            let before = store.serialize().expect("snapshot");
+            let mut bad = staged("D:\\Docs\\bad.txt", "abcdef", 1.0);
+            bad.vector[0] = value;
+            let result = store.reconcile(&root("D:\\Docs"), vec![bad]);
+            assert!(result.is_err(), "expected rejection for {value}");
+            assert_eq!(store.serialize().expect("after"), before);
+        }
+    }
+
+    #[test]
+    fn failed_staged_whole_vector_reconciliation_preserves_valid_entries() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![chunked_staged(
+                    "D:\\Docs\\chunked.txt",
+                    "abcdef",
+                    vec![chunk(0, 6, 1.0)],
+                )],
+            )
+            .expect("seed chunked entry");
+        store.insert(
+            "D:\\Docs\\whole.txt".to_string(),
+            "whole".to_string(),
+            vec384(1.0),
+        );
+        let before = store.serialize().expect("snapshot");
+        let hits_before = store.search(&vec384(1.0), 10);
+
+        let mut bad = staged("D:\\Docs\\bad.txt", "text", 1.0);
+        bad.vector[0] = f32::NAN;
+        let result = store.reconcile(&root("D:\\Docs"), vec![bad]);
+        assert!(result.is_err());
+
+        assert_eq!(store.entry_count(), 2);
+        assert_eq!(store.serialize().expect("after"), before);
+        let hits_after = store.search(&vec384(1.0), 10);
+        assert_eq!(hits_after.len(), hits_before.len());
+        for (after, before) in hits_after.iter().zip(&hits_before) {
+            assert_eq!(after.path, before.path);
+            assert_eq!(after.score, before.score);
+        }
+    }
+
+    #[test]
+    fn reconcile_rejects_staged_document_with_both_representations() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\keep.txt".to_string(), "keep".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let mut bad = staged("D:\\Docs\\bad.txt", "abcdef", 1.0);
+        bad.chunks = vec![chunk(0, 6, 1.0)];
+        let result = store.reconcile(&root("D:\\Docs"), vec![bad]);
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+    }
+
+    #[test]
+    fn reconcile_rejects_nonempty_document_without_embedding() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\keep.txt".to_string(), "keep".to_string(), vec384(1.0));
+        let before = store.serialize().expect("snapshot");
+        let result = store.reconcile(
+            &root("D:\\Docs"),
+            vec![empty_staged("D:\\Docs\\bad.txt", "text")],
+        );
+        assert!(result.is_err());
+        assert_eq!(store.serialize().expect("after"), before);
+    }
+
+    #[test]
+    fn reconcile_accepts_empty_document_as_unsearchable() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![
+                    empty_staged("D:\\Docs\\empty.txt", ""),
+                    staged("D:\\Docs\\a.txt", "hello", 1.0),
+                ],
+            )
+            .expect("reconcile");
+        assert_eq!(store.entry_count(), 2);
+        let results = store.search(&vec384(1.0), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "D:\\Docs\\a.txt");
+    }
+
+    // --- Whole/chunk reconciliation --------------------------------------
+
+    #[test]
+    fn reconcile_replaces_whole_vector_with_chunks() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\a.txt".to_string(), "abcdef".to_string(), vec384(1.0));
+        let n = store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![chunked_staged(
+                    "D:\\Docs\\a.txt",
+                    "abcdef",
+                    vec![chunk(0, 3, 2.0), chunk(3, 6, 3.0)],
+                )],
+            )
+            .expect("reconcile");
+        assert_eq!(n, 1);
+        assert_eq!(store.entry_count(), 1);
+        assert_eq!(chunks_of(&store.entries[0]).len(), 2);
+        assert_eq!(chunks_of(&store.entries[0])[0].vector, vec384(2.0));
+    }
+
+    #[test]
+    fn reconcile_replaces_chunks_with_whole_vector() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![chunked_staged(
+                    "D:\\Docs\\a.txt",
+                    "abcdef",
+                    vec![chunk(0, 3, 2.0), chunk(3, 6, 3.0)],
+                )],
+            )
+            .expect("seed chunks");
+        let n = store
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![staged("D:\\Docs\\a.txt", "abcdef", 5.0)],
+            )
+            .expect("reconcile");
+        assert_eq!(n, 1);
+        assert_eq!(store.entry_count(), 1);
+        assert_eq!(whole_vector(&store.entries[0]), vec384(5.0));
+    }
+
+    // --- Folder counts, isolation, and removal --------------------------
+
+    #[test]
+    fn folder_registration_counts_empty_files_but_isolates_search() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![
+                    empty_staged("D:\\Docs\\empty.txt", ""),
+                    staged("D:\\Docs\\a.txt", "hello", 1.0),
+                ],
+            )
+            .expect("docs");
+        assert_eq!(store.list_folders()[0].file_count, 2);
+        store
+            .reconcile_and_register(
+                &root("E:\\Other"),
+                "E:\\Other",
+                vec![staged("E:\\Other\\b.txt", "keep", 2.0)],
+            )
+            .expect("other");
+        assert_eq!(store.list_folders().len(), 2);
+        let results = store.search(&vec384(1.0), 10);
+        assert_eq!(results.len(), 2);
+        let paths: HashSet<&str> = results.iter().map(|r| r.path.as_str()).collect();
+        assert!(paths.contains("D:\\Docs\\a.txt"));
+        assert!(paths.contains("E:\\Other\\b.txt"));
+    }
+
+    #[test]
+    fn remove_folder_drops_chunked_entries_and_keeps_other_roots() {
+        let mut store = VectorStore::new();
+        store
+            .reconcile_and_register(
+                &root("D:\\Docs"),
+                "D:\\Docs",
+                vec![chunked_staged(
+                    "D:\\Docs\\a.txt",
+                    "abcdef",
+                    vec![chunk(0, 6, 1.0)],
+                )],
+            )
+            .expect("docs");
+        store
+            .reconcile_and_register(
+                &root("E:\\Other"),
+                "E:\\Other",
+                vec![staged("E:\\Other\\b.txt", "keep", 2.0)],
+            )
+            .expect("other");
+        let removed = store.remove_folder(&root("D:\\Docs")).expect("remove");
+        assert_eq!(removed, 1);
+        assert_eq!(store.entry_count(), 1);
+        assert_eq!(store.entries[0].path, "E:\\Other\\b.txt");
+        assert_eq!(store.registered_folders(), vec!["E:\\Other".to_string()]);
+    }
+
+    // --- Chunk search ranking and snippets ------------------------------
+
+    #[test]
+    fn chunk_search_returns_one_result_per_file_using_best_chunk() {
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            "abcdef",
+            vec![
+                chunk_with(0, 3, vec![1.0, 0.0]),
+                chunk_with(3, 6, vec![0.0, 1.0]),
+            ],
+        ));
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\b.txt",
+            "ghijkl",
+            vec![chunk_with(0, 6, vec![0.0, 1.0])],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "D:\\Docs\\a.txt");
+        assert_eq!(results[0].score, 1.0);
+        assert_eq!(results[0].snippet, "abc");
+    }
+
+    #[test]
+    fn chunk_search_max_chunk_wins_over_file_head() {
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            "zzz match",
+            vec![
+                chunk_with(0, 3, vec![0.0, 1.0]),
+                chunk_with(3, 9, vec![1.0, 0.0]),
+            ],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].score, 1.0);
+        assert_eq!(results[0].snippet, " match");
+    }
+
+    #[test]
+    fn chunk_search_tie_uses_earliest_chunk() {
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            "abcdef",
+            vec![
+                chunk_with(0, 3, vec![1.0, 0.0]),
+                chunk_with(3, 6, vec![1.0, 0.0]),
+            ],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results[0].snippet, "abc");
+    }
+
+    #[test]
+    fn chunk_search_keeps_score_at_threshold() {
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\boundary.txt",
+            "abcde",
+            vec![chunk_with(0, 5, vec![1.0, 3.0, 2.0, 1.0, 1.0])],
+        ));
+        let results = store.search(&[1.0, 0.0, 0.0, 0.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].score, MIN_RELEVANCE_SCORE);
+        assert_eq!(results[0].snippet, "abcde");
+    }
+
+    #[test]
+    fn chunk_search_drops_scores_below_threshold() {
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            "abcde",
+            vec![chunk_with(0, 5, vec![0.2, 0.98])],
+        ));
+        assert!(store.search(&[1.0, 0.0], 10).is_empty());
+    }
+
+    #[test]
+    fn chunk_search_snippet_is_bounded_to_winning_chunk() {
+        let content = format!("{}match{}", "x".repeat(10), "y".repeat(10));
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            &content,
+            vec![
+                chunk_with(0, 10, vec![0.0, 1.0]),
+                chunk_with(10, 15, vec![1.0, 0.0]),
+            ],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet, "match");
+    }
+
+    #[test]
+    fn chunk_search_caps_snippet_at_snippet_chars() {
+        let content = "x".repeat(250);
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            &content,
+            vec![chunk_with(0, 250, vec![1.0, 0.0])],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet.chars().count(), SNIPPET_CHARS);
+    }
+
+    #[test]
+    fn chunk_search_snippet_handles_multibyte_range() {
+        let content = "héllo wörld";
+        let mut store = VectorStore::new();
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\a.txt",
+            content,
+            vec![chunk_with(0, content.len(), vec![1.0, 0.0])],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet, content);
+    }
+
+    // --- Deterministic ordering ------------------------------------------
+
+    #[test]
+    fn search_ties_break_by_normalized_path() {
+        let mut store = VectorStore::new();
+        store.insert("D:\\Docs\\b.txt".to_string(), "b".to_string(), vec![1.0, 0.0]);
+        store.insert("d:/docs/A.txt".to_string(), "a".to_string(), vec![1.0, 0.0]);
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "d:/docs/A.txt");
+        assert_eq!(results[1].path, "D:\\Docs\\b.txt");
+    }
+
+    #[test]
+    fn search_ties_with_ambiguous_paths_fall_back_to_raw_path() {
+        let mut store = VectorStore::new();
+        store.insert("b.txt".to_string(), "b".to_string(), vec![1.0, 0.0]);
+        store.insert("a.txt".to_string(), "a".to_string(), vec![1.0, 0.0]);
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "a.txt");
+        assert_eq!(results[1].path, "b.txt");
+    }
+
+    // --- Whole-file compatibility ---------------------------------------
+
+    #[test]
+    fn whole_file_search_keeps_head_snippet_and_scoring() {
+        let mut store = VectorStore::new();
+        store.insert(
+            "D:\\Docs\\a.txt".to_string(),
+            "head text".to_string(),
+            vec384(1.0),
+        );
+        let results = store.search(&vec384(1.0), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet, "head text");
+        assert!((results[0].score - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn whole_and_chunk_entries_rank_together() {
+        let mut store = VectorStore::new();
+        store.insert(
+            "D:\\Docs\\whole.txt".to_string(),
+            "whole".to_string(),
+            vec![1.0, 0.0],
+        );
+        store.entries.push(chunked_entry(
+            "D:\\Docs\\chunk.txt",
+            "abcdef",
+            vec![chunk_with(0, 6, vec![1.0, 1.0])],
+        ));
+        let results = store.search(&[1.0, 0.0], 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "D:\\Docs\\whole.txt");
+        assert_eq!(results[0].score, 1.0);
+        assert_eq!(results[1].path, "D:\\Docs\\chunk.txt");
+        assert!(results[1].score > MIN_RELEVANCE_SCORE);
+        assert!(results[1].score < results[0].score);
+    }
+
+    // --- Persistence failure --------------------------------------------
+
+    #[test]
+    fn failed_chunked_persistence_preserves_prior_disk_index() {
+        let dir = test_dir("chunkfail");
+        let dest = dir.join(INDEX_FILE_NAME);
+        let mut original = VectorStore::new();
+        original.insert("a.txt".to_string(), "original".to_string(), vec384(1.0));
+        original.save_to_path(&dest).expect("seed valid index");
+
+        let mut other = VectorStore::new();
+        other
+            .reconcile(
+                &root("D:\\Docs"),
+                vec![chunked_staged(
+                    "D:\\Docs\\x.txt",
+                    "abcdef",
+                    vec![chunk(0, 6, 2.0)],
+                )],
+            )
+            .expect("reconcile");
+        let result = other.save_to_path_with_rename(&dest, |_, _| {
+            Err(std::io::Error::other("injected rename failure"))
+        });
+        assert!(result.is_err());
+
+        let loaded = match VectorStore::load_from_path(&dest).expect("load") {
+            LoadOutcome::Loaded(s) => s,
+            other => panic!("expected Loaded, got {}", outcome_name(&other)),
+        };
+        assert_eq!(loaded.entry_count(), 1);
+        assert_eq!(loaded.entries[0].path, "a.txt");
+        assert_eq!(whole_vector(&loaded.entries[0]), vec384(1.0));
+        assert!(corrupt_files_in(&dir).is_empty());
     }
 
     fn outcome_name(outcome: &LoadOutcome) -> &'static str {
