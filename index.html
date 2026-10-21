@@ -14,7 +14,17 @@
     </header>
 
     <main class="app-main">
-      <div id="notice" class="notice" role="status" hidden></div>
+      <div id="notice" class="notice" role="status" hidden>
+        <p id="notice-text" class="notice-text"></p>
+        <button
+          id="notice-dismiss"
+          class="notice-dismiss"
+          type="button"
+          aria-label="Dismiss startup notice"
+        >
+          Dismiss
+        </button>
+      </div>
 
       <section class="search-panel" aria-labelledby="search-label">
         <label id="search-label" class="field-label" for="query">Search</label>
