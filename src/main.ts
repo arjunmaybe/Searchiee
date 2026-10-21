@@ -15,6 +15,7 @@ const queryInput = document.querySelector<HTMLInputElement>("#query")!;
 const resultsEl = document.querySelector<HTMLDivElement>("#results")!;
 const indexBtn = document.querySelector<HTMLButtonElement>("#index-btn")!;
 const noticeEl = document.querySelector<HTMLDivElement>("#notice")!;
+const noticeText = document.querySelector<HTMLParagraphElement>("#notice-text")!;
 const foldersEl = document.querySelector<HTMLUListElement>("#folders")!;
 const foldersMeta = document.querySelector<HTMLParagraphElement>("#folders-meta")!;
 const resultsMeta = document.querySelector<HTMLParagraphElement>("#results-meta")!;
@@ -255,7 +256,7 @@ void (async () => {
     const notice = await invoke<string | null>("get_startup_notice");
     if (notice) {
       noticeEl.hidden = false;
-      noticeEl.textContent = notice;
+      noticeText.textContent = notice;
       noticeEl.addEventListener("click", () => {
         noticeEl.hidden = true;
       });
