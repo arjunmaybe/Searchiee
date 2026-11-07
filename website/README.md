@@ -155,9 +155,11 @@ screenshot and wordmark. Do not generate a fake UI for it.
 
 ## Domain-dependent launch work
 
-The production domain is intentionally deferred. Do not deploy this draft as
-production while these tasks are unresolved. Do not use localhost, a preview
-URL, or a guessed domain as a canonical.
+The custom production domain is intentionally deferred. Cloudflare Pages
+provides the automatic `pages.dev` deployment URL, but do not attach a custom
+domain or treat the current deployment as launch-complete while these tasks
+are unresolved. Do not use localhost, a preview URL, or a guessed domain as a
+canonical.
 
 Before launch, with the verified production origin:
 
@@ -165,8 +167,6 @@ Before launch, with the verified production origin:
 - Add `og:url` and an absolute `og:image` URL, and switch the Twitter card to
   `summary_large_image` if a real social image is ready.
 - Add `robots.txt` and `sitemap.xml` with absolute production URLs.
-- Configure preview deployments to send `noindex` so previews cannot be
-  indexed as production.
 - Verify HTTPS, canonical links, Open Graph previews, and the 404 status after
   deployment.
 - Recheck the installer, checksums, release, and issue URLs at launch.
@@ -180,22 +180,69 @@ sitemap files. It does not contain fake placeholders.
 - Decide whether a dedicated privacy contact email and legal entity name are
   required for the jurisdictions where the site and app are offered.
 - Confirm whether a separate terms page or installer EULA is needed.
-- Approve the privacy wording after the production hosting provider is chosen,
-  because hosting request logs are controlled by that provider.
+- Approve the privacy wording for Cloudflare Pages hosting, because hosting
+  request logs are controlled by that provider.
 
 The privacy page currently identifies GitHub Issues as the verified contact
 channel and states that a privacy email or legal entity is not published.
 
-## Hosting notes
+## Deployment
 
-No deployment provider is configured in this repository. Any static host can
-serve `website/dist/`; options include Cloudflare Pages, Netlify, or GitHub
-Pages with a custom domain.
+The site deploys to Cloudflare Pages through GitHub Actions and Wrangler.
+
+- Workflow: `.github/workflows/deploy-searchiee-pages.yml`
+- Cloudflare Pages project: `searchiee`
+- Production URL: `https://searchiee.pages.dev` (HTTP 200 verified 7 November 2026)
+- Production branch: `main`
+- Preview branch: `feat/searchiee-website`
+
+When a push changes `website/**` or the deployment workflow:
+
+- A push to `feat/searchiee-website` creates a preview deployment for
+  `feat/searchiee-website`.
+- A push to `main` creates the production deployment for `main`.
+- Manual workflow runs deploy the branch selected in GitHub Actions.
+- Pull-request events do not deploy.
+
+The deployment branch is supplied dynamically with `${{ github.ref_name }}`.
+Manual runs must select a branch; tag refs are rejected before deployment.
+Each branch uses its own concurrency group, so preview deployments cannot
+cancel production deployments.
+
+The workflow uses Node.js 22, runs `npm ci` and `npm run build` from
+`website/`, and uploads `website/dist/` with
+`cloudflare/wrangler-action@v4`. It preserves the `searchiee` project name and
+uses these GitHub repository secrets:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+`GITHUB_TOKEN` is provided automatically by GitHub Actions.
+
+Cloudflare Pages automatically adds `X-Robots-Tag: noindex` to preview
+deployment responses. Verify a representative preview and confirm the header:
+
+```powershell
+curl -I "https://<preview-deployment>.searchiee.pages.dev"
+```
+
+Replace the placeholder with the preview URL reported by the deployment. The
+response should include:
+
+```text
+x-robots-tag: noindex
+```
+
+This automatic preview protection does not replace the custom-domain,
+canonical URL, sitemap, robots, or social metadata work.
+
+The build remains a portable static site:
 
 - Build command: `npm ci && npm run build` from `website/`
 - Publish directory: `website/dist`
-- Node.js: 20 or newer
-- Configure a real 404 response for unknown paths.
+- Node.js: 20 or newer; CI uses 22
+- Verify Cloudflare Pages returns `404.html` with an HTTP 404 status for
+  unknown paths.
 - Set security headers at the host if supported. Keep the site free of
   third-party runtime requests.
 - Do not add analytics without a concrete measurement need and an accurate
@@ -203,10 +250,12 @@ Pages with a custom domain.
 
 ## Scope safeguards
 
-- All website work belongs under `website/`.
+- Website source and configuration belong under `website/`. The Cloudflare
+  Pages workflow is the only deployment workflow outside that directory.
 - Do not change the root Searchiee package, lockfile, Tauri configuration,
   desktop behavior, indexing, persistence, ranking, or the relevance threshold
   that exists only in the post-v0.1.0 source.
 - Do not touch `clippy-out.txt`, evaluation outputs, `test-out.txt`, or
   `src-tauri/.fastembed_cache/`.
-- Do not add CI workflows or deploy from this task without separate approval.
+- Do not add unrelated CI workflows or change the Cloudflare Pages deployment
+  workflow without separate review and approval.
