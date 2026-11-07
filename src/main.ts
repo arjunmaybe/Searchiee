@@ -155,9 +155,37 @@ async function runSearch() {
     return;
   }
 
-  const results = await invoke<SearchResult[]>("search", { query });
-  if (requestId !== searchRequestId) return;
-  render(results, query);
+  try {
+    const results = await invoke<SearchResult[]>("search", { query });
+    if (requestId !== searchRequestId) return;
+    render(results, query);
+  } catch (e) {
+    if (requestId !== searchRequestId) return;
+    renderSearchError(query, e);
+  }
+}
+
+function renderSearchError(query: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  resultsEl.replaceChildren();
+
+  resultsMeta.textContent = `Search failed for “${query}”`;
+  resultsMeta.title = resultsMeta.textContent;
+
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+
+  const title = document.createElement("p");
+  title.className = "empty-title";
+  title.textContent = "Search failed";
+
+  const copy = document.createElement("p");
+  copy.className = "empty-copy";
+  copy.textContent = message;
+
+  empty.append(title, copy);
+  resultsEl.append(empty);
 }
 
 function render(results: SearchResult[], query: string) {
