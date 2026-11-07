@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Privacy — Searchiee</title>
+    <meta
+      name="description"
+      content="How Searchiee handles selected files, local index storage, first-run model downloads, website data, and support contact."
+    />
+    <meta name="theme-color" content="#f2eee5" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+
+    <meta property="og:site_name" content="Searchiee" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Privacy — Searchiee" />
+    <meta
+      property="og:description"
+      content="How Searchiee handles selected files, local index storage, first-run model downloads, website data, and support contact."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Privacy — Searchiee" />
+    <meta
+      name="twitter:description"
+      content="How Searchiee handles selected files, local index storage, first-run model downloads, website data, and support contact."
+    />
+
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="/" aria-label="Searchiee home">
+          <span class="brand-name">Searchiee</span>
+          <span class="brand-sub">Local document search</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="/#local">Local</a>
+          <a href="/#scope">Scope</a>
+          <a href="/#install">Install</a>
+          <a href="https://github.com/arjunmaybe/Searchiee">Source</a>
+          <a class="nav-download" href="/#install">Download</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="page-main">
+      <div class="shell">
+        <header class="page-head">
+          <p class="eyebrow">Privacy / Searchiee</p>
+          <h1>Privacy and local data.</h1>
+          <p class="lede">
+            Searchiee is a desktop app first and a website second. This page
+            covers both, including what stays on your PC and when the app needs
+            network access.
+          </p>
+          <p class="updated">
+            Last updated
+            <time datetime="2026-10-22">22 October 2026</time>
+          </p>
+        </header>
+
+        <div class="policy">
+          <section class="policy-section" aria-labelledby="privacy-website">
+            <p class="section-no">01 / Website</p>
+            <div class="prose">
+              <h2 id="privacy-website">This website</h2>
+              <p>
+                This is a static website. It sets no cookies, runs no analytics,
+                and loads no advertising or third-party scripts. There is no
+                account or search form on the site.
+              </p>
+              <p>
+                When the site is deployed, the static host and GitHub may process
+                ordinary request data under their own policies. Searchiee does
+                not add tracking beyond that hosting.
+              </p>
+            </div>
+          </section>
+
+          <section class="policy-section" aria-labelledby="privacy-app">
+            <p class="section-no">02 / Desktop app</p>
+            <div class="prose">
+              <h2 id="privacy-app">The desktop application</h2>
+              <p>
+                Searchiee reads only the folders you add, and only Markdown and
+                plain-text files inside them. It embeds the text locally and
+                stores the result in a local index.
+              </p>
+              <p>
+                The index lives in Tauri’s application-specific local data
+                directory as <code>index-v1.json</code>. It contains registered
+                folder paths, document paths, document contents, and embedding
+                vectors. It is not uploaded to a Searchiee server, and the
+                current app has no hosted account or cloud-search service.
+              </p>
+              <p>
+                The current source contains no telemetry. Removing a folder
+                deletes that folder’s index entries, not the original files.
+                Deleting the index resets the saved index and requires
+                re-indexing; your documents stay where they are.
+              </p>
+              <p>
+                There is no background filesystem watcher. Files are read when
+                you index or refresh a folder, and search runs against the local
+                index.
+              </p>
+            </div>
+          </section>
+
+          <section class="policy-section" aria-labelledby="privacy-network">
+            <p class="section-no">03 / Network</p>
+            <div class="prose">
+              <h2 id="privacy-network">Model download and offline use</h2>
+              <p>
+                The first indexing or search needs network access to download
+                the FastEmbed <code>AllMiniLML6V2</code> model, roughly 90 MB.
+                After the model is cached, indexing and searching work offline.
+              </p>
+              <p>
+                An offline first run is not promised. If the model is not cached
+                and the download cannot complete, the app cannot index or search
+                until the model is available.
+              </p>
+            </div>
+          </section>
+
+          <section class="policy-section" aria-labelledby="privacy-downloads">
+            <p class="section-no">04 / Downloads</p>
+            <div class="prose">
+              <h2 id="privacy-downloads">GitHub Releases</h2>
+              <p>
+                Installers and checksums are delivered through GitHub Releases.
+                Downloading them is a request to GitHub, which may process
+                ordinary request data under its own privacy policy.
+              </p>
+              <p>
+                The release includes NSIS and MSI installers plus a
+                <a href="https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/SHA256SUMS.txt">
+                  SHA-256 checksum file
+                </a>.
+              </p>
+            </div>
+          </section>
+
+          <section class="policy-section" aria-labelledby="privacy-contact">
+            <p class="section-no">05 / Contact</p>
+            <div class="prose">
+              <h2 id="privacy-contact">Questions and requests</h2>
+              <p>
+                The verified contact channel is
+                <a href="https://github.com/arjunmaybe/Searchiee/issues">
+                  Searchiee Issues on GitHub
+                </a>. A dedicated privacy email or legal entity is not currently
+                published.
+              </p>
+              <p class="small-note">
+                This statement describes the current website and Searchiee
+                0.1.0. Update it if the app, hosting, or data handling changes.
+              </p>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-inner">
+        <div>
+          <p class="footer-wordmark">Searchiee</p>
+          <p class="footer-line">Local semantic search for Windows.</p>
+        </div>
+        <nav class="footer-nav" aria-label="Footer">
+          <a href="/">Home</a>
+          <a href="/#install">Download</a>
+          <a href="https://github.com/arjunmaybe/Searchiee/issues">Issues</a>
+        </nav>
+        <p class="footer-meta">v0.1.0 · Built with Tauri, Rust, and FastEmbed</p>
+      </div>
+    </footer>
+  </body>
+</html>

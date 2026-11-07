@@ -1,0 +1,64 @@
+name: Deploy Searchiee Website
+
+on:
+  push:
+    branches:
+      - main
+      - feat/searchiee-website
+    paths:
+      - "website/**"
+      - ".github/workflows/deploy-searchiee-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: searchiee-pages-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy website
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Resolve deployment branch
+        id: deployment-branch
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "::error::Searchiee Pages deployment requires a branch ref; tag refs are not supported."
+            exit 1
+          fi
+          printf 'name=%s\n' "$REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build website
+        working-directory: website
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy website/dist --project-name=searchiee --branch=${{ steps.deployment-branch.outputs.name }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

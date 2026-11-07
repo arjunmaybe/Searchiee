@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Searchiee — local semantic search for Windows</title>
+    <meta
+      name="description"
+      content="Search the Markdown and text files you choose by meaning. Searchiee runs on Windows, keeps its index on your PC, and needs no account."
+    />
+    <meta name="theme-color" content="#f2eee5" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+
+    <meta property="og:site_name" content="Searchiee" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Searchiee — local semantic search for Windows" />
+    <meta
+      property="og:description"
+      content="Search the Markdown and text files you choose by meaning. Local embeddings, a local index, and no account."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Searchiee — local semantic search for Windows" />
+    <meta
+      name="twitter:description"
+      content="Search the Markdown and text files you choose by meaning. Local embeddings, a local index, and no account."
+    />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Searchiee",
+        "description": "A local-first Windows desktop app for semantic search across Markdown and plain-text files.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows 10, Windows 11",
+        "softwareVersion": "0.1.0",
+        "downloadUrl": "https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/Searchiee_0.1.0_x64-setup.exe",
+        "sameAs": "https://github.com/arjunmaybe/Searchiee",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="/" aria-label="Searchiee home">
+          <span class="brand-name">Searchiee</span>
+          <span class="brand-sub">Local document search</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="#local">Local</a>
+          <a href="#scope">Scope</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/arjunmaybe/Searchiee">Source</a>
+          <a class="nav-download" href="#install">Download</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="shell hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow">Local semantic search for Windows</p>
+            <h1 id="hero-title">
+              Search your files
+              <span class="hero-accent">by meaning.</span>
+            </h1>
+            <p class="lede">
+              Searchiee indexes the Markdown and text folders you choose, then
+              finds files whose content matches what you remember — not just the
+              words you typed. The index stays on your Windows PC.
+            </p>
+            <div class="hero-actions">
+              <a
+                class="action action-primary"
+                href="https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/Searchiee_0.1.0_x64-setup.exe"
+              >
+                <span>Download for Windows</span>
+                <small>v0.1.0 · 8.4 MB</small>
+              </a>
+              <a class="text-link" href="https://github.com/arjunmaybe/Searchiee">
+                View source
+              </a>
+            </div>
+            <dl class="release-meta" aria-label="Release details">
+              <div>
+                <dt>Platform</dt>
+                <dd>Windows 10/11, x64</dd>
+              </div>
+              <div>
+                <dt>Search</dt>
+                <dd>Local semantic</dd>
+              </div>
+              <div>
+                <dt>Results</dt>
+                <dd>Up to 10 files</dd>
+              </div>
+            </dl>
+          </div>
+
+          <aside class="index-card" aria-label="Searchiee at a glance">
+            <div class="index-card-head">
+              <span>Index / Searchiee</span>
+              <span>0.1.0</span>
+            </div>
+            <dl class="index-list">
+              <div>
+                <dt>Scope</dt>
+                <dd>.md and .txt</dd>
+              </div>
+              <div>
+                <dt>Model</dt>
+                <dd>AllMiniLML6V2</dd>
+              </div>
+              <div>
+                <dt>Embeddings</dt>
+                <dd>Local, 384 dimensions</dd>
+              </div>
+              <div>
+                <dt>Storage</dt>
+                <dd>Index on this PC</dd>
+              </div>
+              <div>
+                <dt>Ranking</dt>
+                <dd>Cosine similarity</dd>
+              </div>
+            </dl>
+            <p class="index-foot">A local index, not a cloud account.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="search" aria-labelledby="search-title">
+        <div class="shell">
+          <header class="section-head">
+            <p class="section-no">01 / Search</p>
+            <h2 id="search-title">Meaning, not exact matches.</h2>
+          </header>
+
+          <div class="split">
+            <div class="prose">
+              <p class="lead">
+                A keyword search asks whether your words appear. Searchiee asks
+                which indexed files are closest in meaning.
+              </p>
+              <p>
+                Each selected Markdown or text file is embedded as a whole with
+                FastEmbed. A query is embedded the same way, then compared with
+                every indexed file. Searchiee returns one result per file,
+                ranked by cosine similarity, with a short snippet and score.
+              </p>
+              <p>
+                Searchiee points back to your files; it does not generate
+                answers. The similarity score is a ranking signal, not a
+                probability.
+              </p>
+            </div>
+
+            <div class="search-note">
+              <h3>What one search does</h3>
+              <ol class="sequence">
+                <li>
+                  <span class="sequence-no">01</span>
+                  <div>
+                    <strong>Embed the query</strong>
+                    <p>The query is converted on your machine with FastEmbed.</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="sequence-no">02</span>
+                  <div>
+                    <strong>Compare the files</strong>
+                    <p>
+                      The query embedding is compared with every indexed file by
+                      cosine similarity.
+                    </p>
+                  </div>
+                </li>
+                <li>
+                  <span class="sequence-no">03</span>
+                  <div>
+                    <strong>Return the files</strong>
+                    <p>Up to 10 files appear, each with a snippet and score.</p>
+                  </div>
+                </li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-local" id="local" aria-labelledby="local-title">
+        <div class="shell">
+          <header class="section-head section-head-inverse">
+            <p class="section-no">02 / Local</p>
+            <h2 id="local-title">Your files stay where they are.</h2>
+          </header>
+
+          <div class="local-grid">
+            <p class="local-lede">
+              Searchiee is a desktop tool, not a hosted service. It reads the
+              supported files in the folders you add, builds a local index, and
+              searches that index on your PC.
+            </p>
+
+            <dl class="local-facts">
+              <div>
+                <dt>Processing</dt>
+                <dd>FastEmbed runs on your machine. No API key or cloud search call.</dd>
+              </div>
+              <div>
+                <dt>Storage</dt>
+                <dd>The index holds document contents and embeddings in local app data.</dd>
+              </div>
+              <div>
+                <dt>Accounts</dt>
+                <dd>None. No sign-in, synchronization, or team workspace.</dd>
+              </div>
+              <div>
+                <dt>Telemetry</dt>
+                <dd>v0.1.0 contains no telemetry.</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="local-caveat">
+            <p class="caveat-label">First run</p>
+            <p>
+              Network access is required once to download the roughly 90 MB
+              <code>AllMiniLML6V2</code> model. After it is cached, indexing and
+              searching work offline.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="scope" aria-labelledby="scope-title">
+        <div class="shell">
+          <header class="section-head">
+            <p class="section-no">03 / Scope</p>
+            <h2 id="scope-title">A deliberately small scope.</h2>
+          </header>
+
+          <div class="scope-grid">
+            <div class="scope-copy">
+              <p class="lead">
+                The index is limited to text you point it at, not your whole
+                drive.
+              </p>
+              <p>
+                You add each folder yourself. Searchiee scans it for Markdown
+                and plain-text files, embeds the text, and keeps the folder in
+                its registry. There is no background watcher: refresh a folder
+                when its files change.
+              </p>
+
+              <div class="excluded">
+                <h3>Not in 0.1.0</h3>
+                <ul class="plain-list">
+                  <li>PDFs, Office documents, images, or OCR</li>
+                  <li>Background file watching</li>
+                  <li>Cloud synchronization or accounts</li>
+                  <li>Generated answers or a chat interface</li>
+                </ul>
+              </div>
+            </div>
+
+            <dl class="spec">
+              <div>
+                <dt>Formats</dt>
+                <dd>Markdown (<code>.md</code>) and plain text (<code>.txt</code>), any letter case.</dd>
+              </div>
+              <div>
+                <dt>Indexing</dt>
+                <dd>Folders you add manually.</dd>
+              </div>
+              <div>
+                <dt>Refresh</dt>
+                <dd>Manual. Changed files appear after you refresh the folder.</dd>
+              </div>
+              <div>
+                <dt>Results</dt>
+                <dd>One result per file, up to 10, with a snippet and similarity score.</dd>
+              </div>
+              <div>
+                <dt>Ranking</dt>
+                <dd>Cosine similarity between the query and each file’s embedding.</dd>
+              </div>
+              <div>
+                <dt>Storage</dt>
+                <dd>A local JSON index containing paths, document contents, and embeddings.</dd>
+              </div>
+              <div>
+                <dt>Platform</dt>
+                <dd>Windows 10/11, x64.</dd>
+              </div>
+              <div>
+                <dt>Downloads</dt>
+                <dd>NSIS and MSI installers, with published SHA-256 checksums.</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="install" aria-labelledby="install-title">
+        <div class="shell">
+          <header class="section-head">
+            <p class="section-no">04 / Install</p>
+            <h2 id="install-title">Searchiee 0.1.0 for Windows.</h2>
+          </header>
+
+          <div class="install-grid">
+            <div class="install-copy">
+              <p class="lead">
+                Use the NSIS installer for a normal desktop install, or the MSI
+                for managed deployment. Both are Windows x64 builds.
+              </p>
+
+              <ol class="steps">
+                <li>
+                  <div>
+                    <strong>Run the installer.</strong>
+                    <p>Windows 10 or 11, x64. WebView2 is normally already present.</p>
+                  </div>
+                </li>
+                <li>
+                  <div>
+                    <strong>Index a folder.</strong>
+                    <p>Open Searchiee, click Index a folder, and enter its path.</p>
+                  </div>
+                </li>
+                <li>
+                  <div>
+                    <strong>Search and refresh.</strong>
+                    <p>Type what you remember. Refresh a folder after its files change.</p>
+                  </div>
+                </li>
+              </ol>
+
+              <div class="requirements">
+                <h3>Before you start</h3>
+                <ul class="plain-list">
+                  <li>Windows 10/11, x64</li>
+                  <li>WebView2, normally included with Windows</li>
+                  <li>Internet access for the first model download</li>
+                </ul>
+                <p class="small-note">
+                  Node.js and Rust are only needed to build from source, not to
+                  use the installer.
+                </p>
+              </div>
+            </div>
+
+            <div class="release-slip">
+              <div class="release-head">
+                <span>Release</span>
+                <span>13 October 2026</span>
+              </div>
+              <h3 class="release-title">Searchiee 0.1.0</h3>
+              <p class="release-platform">Windows 10/11 · x64 · 8.4 MB</p>
+
+              <div class="download-actions">
+                <a
+                  class="action action-primary"
+                  href="https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/Searchiee_0.1.0_x64-setup.exe"
+                >
+                  <span>Download .exe</span>
+                  <small>NSIS installer</small>
+                </a>
+                <a
+                  class="action action-secondary"
+                  href="https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/Searchiee_0.1.0_x64_en-US.msi"
+                >
+                  <span>Download .msi</span>
+                  <small>12.3 MB</small>
+                </a>
+              </div>
+
+              <ul class="release-links">
+                <li>
+                  <a href="https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/SHA256SUMS.txt">
+                    SHA-256 checksums
+                  </a>
+                </li>
+                <li>
+                  <a href="https://github.com/arjunmaybe/Searchiee/releases/tag/v0.1.0">
+                    Release notes
+                  </a>
+                </li>
+              </ul>
+
+              <p class="release-note">
+                Downloads are served by GitHub Releases. Verify the checksum
+                before running the installer.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="source" aria-labelledby="source-title">
+        <div class="shell">
+          <header class="section-head">
+            <p class="section-no">05 / Source</p>
+            <h2 id="source-title">Source and project.</h2>
+          </header>
+
+          <div class="source-grid">
+            <p class="lead">
+              The repository, release notes, checksums, and issue tracker are
+              on GitHub.
+            </p>
+            <div>
+              <p>
+                The source is public for inspection. No license is currently
+                declared, so this site makes no open-source claim. GitHub Issues
+                is the verified contact channel for bugs and questions.
+              </p>
+              <ul class="source-links">
+                <li>
+                  <a href="https://github.com/arjunmaybe/Searchiee">Repository</a>
+                </li>
+                <li>
+                  <a href="https://github.com/arjunmaybe/Searchiee/releases">Releases</a>
+                </li>
+                <li>
+                  <a href="https://github.com/arjunmaybe/Searchiee/issues">Issues</a>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-inner">
+        <div>
+          <p class="footer-wordmark">Searchiee</p>
+          <p class="footer-line">Local semantic search for Windows.</p>
+        </div>
+        <nav class="footer-nav" aria-label="Footer">
+          <a href="/privacy/">Privacy</a>
+          <a href="https://github.com/arjunmaybe/Searchiee/releases/tag/v0.1.0">Release</a>
+          <a href="https://github.com/arjunmaybe/Searchiee/issues">Issues</a>
+        </nav>
+        <p class="footer-meta">v0.1.0 · Built with Tauri, Rust, and FastEmbed</p>
+      </div>
+    </footer>
+  </body>
+</html>
