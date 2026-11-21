@@ -1,7 +1,8 @@
 [package]
 name = "searchiee"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
