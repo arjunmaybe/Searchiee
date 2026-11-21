@@ -6,6 +6,21 @@ with Tauri v2, Rust, TypeScript, and Vite. You add folders containing
 after files change, and remove folders from the index. All indexing and
 search runs on your machine; nothing is uploaded anywhere.
 
+## Licensing
+
+Searchiee is source-available under the **PolyForm Noncommercial License 1.0.0**. See [`LICENSE`](LICENSE) for the complete, unmodified licence text.
+
+- Personal and other noncommercial use is permitted under the licence.
+- The licence expressly covers qualifying charitable, educational, public research, public safety or health, environmental protection, and government organisations, as defined in the licence.
+- Commercial use, including internal business operations, commercial resale or distribution, and paid hosted services, requires separate written commercial permission unless the use is expressly permitted by the community licence.
+- Commercial licensees may retain their independently authored modifications as private, subject to their written agreement.
+
+See [`COMMERCIAL-LICENSING.md`](COMMERCIAL-LICENSING.md) for information about requesting commercial permission and the proposed commercial terms.
+
+Redistributors must provide the licence text or its official URL and preserve the required notice in [`NOTICE`](NOTICE).
+
+Searchiee is source-available; it is not presented as OSI-approved open-source software.
+
 ## What you can do
 
 - **Add a folder** ("Index a folder"): scans the folder for supported
