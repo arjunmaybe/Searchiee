@@ -46,6 +46,8 @@ website/
 ├── index.html
 ├── privacy/
 │   └── index.html
+├── licensing/
+│   └── index.html
 ├── 404.html
 ├── src/
 │   └── styles.css
@@ -53,8 +55,8 @@ website/
     └── favicon.ico
 ```
 
-`vite.config.js` declares three HTML inputs: the landing page, privacy page,
-and 404 page. The build output is independent of the root Tauri application.
+`vite.config.js` declares four HTML inputs: the landing page, privacy page,
+licensing page, and 404 page. The build output is independent of the root Tauri application.
 
 ## Design and implementation decisions
 
@@ -77,52 +79,66 @@ and 404 page. The build output is independent of the root Tauri application.
 
 ## Verified product facts and links
 
-Last verified: 22 October 2026.
+Last verified: 22 November 2026.
 
 - Repository: https://github.com/arjunmaybe/Searchiee
-- Release page: https://github.com/arjunmaybe/Searchiee/releases/tag/v0.1.0
+- Current release: https://github.com/arjunmaybe/Searchiee/releases/tag/v0.2.0
 - Windows NSIS installer:
-  https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/Searchiee_0.1.0_x64-setup.exe
+  https://github.com/arjunmaybe/Searchiee/releases/download/v0.2.0/Searchiee_0.2.0_x64-setup.exe
 - Windows MSI installer:
-  https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/Searchiee_0.1.0_x64_en-US.msi
+  https://github.com/arjunmaybe/Searchiee/releases/download/v0.2.0/Searchiee_0.2.0_x64_en-US.msi
 - Checksums:
-  https://github.com/arjunmaybe/Searchiee/releases/download/v0.1.0/SHA256SUMS.txt
+  https://github.com/arjunmaybe/Searchiee/releases/download/v0.2.0/SHA256SUMS.txt
+- License summary: https://searchiee.pages.dev/licensing/
+- Full license: https://github.com/arjunmaybe/Searchiee/blob/main/LICENSE
+- Commercial licensing: https://github.com/arjunmaybe/Searchiee/blob/main/COMMERCIAL-LICENSING.md
+- Required notice: https://github.com/arjunmaybe/Searchiee/blob/main/NOTICE
 - Issues: https://github.com/arjunmaybe/Searchiee/issues
 
-Product facts used on the site (downloadable v0.1.0):
+Product facts used on the site (downloadable v0.2.0):
 
 - Searchiee is a Windows 10/11 x64 desktop app, not a hosted service.
 - It indexes only Markdown (`.md`) and plain-text (`.txt`) files.
-- The user adds and refreshes folders manually; there is no background
-  filesystem watcher.
+- Users add and refresh folders manually; there is no background filesystem
+  watcher.
 - Embeddings are generated locally with FastEmbed `AllMiniLML6V2`
   (384 dimensions).
-- In v0.1.0, each selected Markdown or text file is embedded as a whole;
-  documents are not split into chunks.
-- The local index stores paths, document contents, and embeddings in
-  `index-v1.json` inside Tauri's application-specific local data directory.
-- Search returns one result per file, up to 10, with a snippet of up to
-  200 characters and a cosine similarity score.
-- v0.1.0 ranks files by cosine similarity without a fixed minimum-score
-  filter.
+- Long documents are split into overlapping chunks sized with the model's
+  tokenizer, with a 4,096-character secondary cap and up to 120 characters of
+  context overlap when the token budget allows. Up to 32 chunk texts are
+  embedded per model call.
+- The local index stores registered folder paths, document paths, contents,
+  and per-chunk embeddings in `index-v1.json` inside Tauri's application-specific
+  local data directory (current schema v3). Legacy whole-file entries remain
+  supported.
+- Search returns one result per file, ranking each file by its best-matching
+  chunk. Scores below `0.25` are filtered out; the top 10 results show a
+  snippet of up to 200 characters from the best-matching chunk.
+- The `0.25` minimum cosine-similarity threshold is experimental and is not
+  calibrated against a broad labelled evaluation set.
 - The first model download is roughly 90 MB and requires network access.
   Later indexing and search work offline once the model is cached.
-- v0.1.0 contains no telemetry, account system, or cloud search service.
-- Release v0.1.0 was published on 13 October 2026.
+- v0.2.0 contains no telemetry, account system, or cloud search service.
+- Release v0.2.0 was published on 21 November 2026. The release includes
+  Windows NSIS and MSI installers and a SHA-256 manifest.
 
-The site does not call the project open source. The repository currently has
-no license file, and GitHub reports no declared license.
+## Licensing facts used on the site
 
-### Post-release changes in the current source
-
-The current source contains changes made after v0.1.0 was published, including
-long-document chunking and a `0.25` minimum cosine-similarity threshold. These
-changes are not part of the downloadable v0.1.0 installer. Public copy that
-describes v0.1.0 must not present chunking, best-matching chunks, or a fixed
-threshold as release behavior.
-
-When a future release includes those changes, update the release links and the
-release-specific copy together.
+- Searchiee is source-available under the PolyForm Noncommercial License
+  1.0.0. It is not OSI-approved open-source software.
+- The license permits noncommercial purposes and expressly covers personal
+  uses and the listed qualifying organizations, as defined by its terms.
+- General commercial use—including internal business operations, commercial
+  redistribution, resale, bundling, and paid hosted services—requires separate
+  written permission unless the community license expressly covers the use.
+- The commercial licensing document's 5% attributable-net-receipts royalty
+  and annual minimum guarantee are proposed negotiating terms, not automatic
+  obligations or a binding public offer. Rights and payment obligations arise
+  only under a separate written agreement.
+- Redistributors must provide the license text or its official URL and retain
+  the required notice: `Required Notice: Copyright (c) 2026 Arjun Sasi.`
+- Third-party dependencies and the embedding model remain subject to their
+  own licenses and terms.
 
 ## Missing product image
 
@@ -134,7 +150,7 @@ not substitute a fabricated interface or a broken placeholder.
 
 The exact screenshot to capture later:
 
-1. Run Searchiee 0.1.0 from an isolated synthetic demo library. Do not use a
+1. Run Searchiee 0.2.0 from an isolated synthetic demo library. Do not use a
    real saved index, personal paths, or personal document contents.
 2. Use a clean search-results state at 1440×1000 logical pixels, 100% Windows
    scaling (or capture at 2× for high-DPI and downscale). Hide the startup
@@ -176,7 +192,7 @@ sitemap files. It does not contain fake placeholders.
 
 ## Legal and factual details still requiring the owner
 
-- Choose and add a license if the project should be described as open source.
+- Keep the website license summary aligned with `LICENSE` and `COMMERCIAL-LICENSING.md`; do not describe Searchiee as OSI-approved open source.
 - Decide whether a dedicated privacy contact email and legal entity name are
   required for the jurisdictions where the site and app are offered.
 - Confirm whether a separate terms page or installer EULA is needed.
@@ -253,8 +269,8 @@ The build remains a portable static site:
 - Website source and configuration belong under `website/`. The Cloudflare
   Pages workflow is the only deployment workflow outside that directory.
 - Do not change the root Searchiee package, lockfile, Tauri configuration,
-  desktop behavior, indexing, persistence, ranking, or the relevance threshold
-  that exists only in the post-v0.1.0 source.
+  desktop behavior, indexing, persistence, ranking, or release functionality.
+  Keep public product claims aligned with the downloadable v0.2.0 release.
 - Do not touch `clippy-out.txt`, evaluation outputs, `test-out.txt`, or
   `src-tauri/.fastembed_cache/`.
 - Do not add unrelated CI workflows or change the Cloudflare Pages deployment

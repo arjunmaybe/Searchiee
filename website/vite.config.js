@@ -20,6 +20,7 @@ export default defineConfig({
       input: {
         home: page("./index.html"),
         privacy: page("./privacy/index.html"),
+        licensing: page("./licensing/index.html"),
         notFound: page("./404.html"),
       },
     },
